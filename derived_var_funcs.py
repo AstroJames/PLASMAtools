@@ -4,7 +4,7 @@
     Date: 09/07/2017
     Description: Functions for calculating derived variables in the read_flash classes
     
-    Collaborators: Neco Kriel (all the curvature functions)
+    Collaborators: Neco Kriel (all the curvature functions).
 
 """
 
@@ -60,7 +60,6 @@ def helmholtz_decomposition(F,x):
     
     return F_irrot, F_solen
 
-
 def vectorCrossProduct(vector1, vector2):
     """
     Author: Neco Kriel
@@ -91,7 +90,7 @@ def fieldMagnitude(vector_field):
 
 def gradient_2ocd(field, cell_width, gradient_dir):
     """
-    Author Neco Kriel
+    Author: Neco Kriel
     """
     F = -1 # shift forwards
     B = +1 # shift backwards
