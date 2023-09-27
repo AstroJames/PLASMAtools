@@ -1,10 +1,40 @@
+## ###############################################################
+## IMPORTS
+## ###############################################################
+
 import time
+from tkinter import N
 from uu import Error
 from h5py import File
 import numpy as np
 import numpy.polynomial.polynomial as poly
 import timeit
 import derived_var_funcs as dvf
+import pandas as pd
+
+## ###############################################################
+## Global variables
+## ###############################################################
+
+field_lookup_type = {
+    "dens": "scalar",
+    "dvvl": "scalar",
+    "alpha": "scalar",
+    "vel" : "vector",
+    "mag" : "vector",
+    "tens": "vector",
+    "vort": "vector",
+    "mpr" : "vector",
+    "tprs": "vector",
+    "cur" : "vector",
+    "vxb" : "vector",
+    "mXc" : "vector",
+    "mXc_mag": "scalar"
+}
+
+## ###############################################################
+## Classes
+## ###############################################################
 
 class Particles:
 
@@ -278,22 +308,6 @@ class Fields():
         This function reads in the FLASH grid data
         """
 
-        field_lookup_type = {
-            "dens": "scalar",
-            "dvvl": "scalar",
-            "alpha": "scalar",
-            "vel" : "vector",
-            "mag" : "vector",
-            "tens": "vector",
-            "vort": "vector",
-            "mpr" : "vector",
-            "tprs": "vector",
-            "cur" : "vector",
-            "vxb" : "vector",
-            "mXc" : "vector",
-            "mXc_mag": "scalar"
-        }
-
         if field_lookup_type[field_str] == "scalar":
             g = File(self.filename, 'r')
             print(f"Reading in grid attribute: {field_str}")
@@ -359,7 +373,7 @@ class Fields():
             "ExB": ["ExBx","ExBy","ExBz"],
             "VxB": ["VxBx","VxBy","VxBz"],
             "jacobian_mag": ["eig_1","eig_2","eig_3"],
-            "helmholtz": ["vel_compx","vel_comy1","vel_compz","vel_solx","vel_soly","vel_solz"]
+            "helmholtz": ["vel_comx","vel_comy","vel_comz","vel_solx","vel_soly","vel_solz"]
         }
         
         # grid data attributes
@@ -529,7 +543,59 @@ class Fields():
             for coords, idx in enumerate(["x", "y", "z"]):
                 setattr(self, f"vel_comp{coords}", F_irrot[idx])
                 setattr(self, f"vel_sol{coords}", F_solen[idx])
-                
+    
+
+class PowerSpectra():
+    
+    def __init__(self) -> None:
+        self.filename: str              = ""
+        self.names: list                = []
+        self.wavenumber: list           = []
+        self.power:list                 = [] 
+        self.correlation_scale: float   = 0.0
+        self.microscale:float           = 0.0
+        self.peakscale: float           = 0.0
+        
+    def set_power_spectra_header(self,
+                                 field_str: str) -> None:
+        if field_lookup_type[field_str] == "vector":
+            self.names = ["#00_BinIndex",
+                     "#01_KStag",
+                     "#02_K","#03_DK",
+                     "#04_NCells",
+                     "#05_SpectDensLgt",
+                     "#06_SpectDensLgtSigma",
+                     "#07_SpectDensTrv",
+                     "#08_SpectDensTrvSigma",
+                     "#09_SpectDensTot",
+                     "#10_SpectDensTotSigma",
+                     "#11_SpectFunctLgt",
+                     "#12_SpectFunctLgtSigma",
+                     "#13_SpectFunctTrv",
+                     "#14_SpectFunctTrvSigma",
+                     "#15_SpectFunctTot",
+                     "#16_SpectFunctTotSigma",
+                     "#17_CompSpectFunctLgt",
+                     "#18_CompSpectFunctLgtSigma",
+                     "#19_CompSpectFunctTrv",
+                     "#20_CompSpectFunctTrvSigma",
+                     "#21_DissSpectFunct",
+                     "#22_DissSpectFunctSigma"]
+    
+    def read(self,
+             filename: str,
+             field_str: str) -> None:
+        
+        skip = 6
+        p_spec = pd.read_table(self.filename,
+                      names=self.names,
+                      skiprows=skip,
+                      sep=r"\s+")
+        
+         
+## ###############################################################
+## Auxillary reading functions (can be jit compiled)
+## ###############################################################            
     
 def reformat_FLASH_field(field  : np.ndarray,
                          nxb    : int,
