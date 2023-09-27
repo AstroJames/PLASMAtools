@@ -547,8 +547,9 @@ class Fields():
 
 class PowerSpectra():
     
-    def __init__(self) -> None:
-        self.filename: str              = ""
+    def __init__(self,
+                 filename: str) -> None:
+        self.filename: str              = filename
         self.names: list                = []
         self.wavenumber: list           = []
         self.power:list                 = [] 
@@ -561,7 +562,8 @@ class PowerSpectra():
         if field_lookup_type[field_str] == "vector":
             self.names = ["#00_BinIndex",
                      "#01_KStag",
-                     "#02_K","#03_DK",
+                     "#02_K",
+                     "#03_DK",
                      "#04_NCells",
                      "#05_SpectDensLgt",
                      "#06_SpectDensLgtSigma",
@@ -591,6 +593,28 @@ class PowerSpectra():
                       names=self.names,
                       skiprows=skip,
                       sep=r"\s+")
+        self.power      = p_spec["#15_SpectFunctTot"].to_numpy()
+        self.power_trv  = p_spec["#13_SpectFunctTrv"].to_numpy()
+        self.power_lng  = p_spec["#11_SpectFunctLgt"].to_numpy()
+        self.power_norm = np.sum(self.power)
+        self.wavenumber = p_spec["#01_KStag"].to_numpy()
+        
+        self.__compute_correlation_scale()
+        self.__compute_micro_scale()
+        self.__compute_peaks_cale()
+        
+    def __compute_correlation_scale(self):
+        self.correlation_scale = np.sum( self.power_norm /(self.power * self.wavenumber**-1) )
+
+    def __compute_micro_scale(self):
+        self.microscale = np.sqrt(np.sum( self.power * self.wavenumber**2 / self.power_norm ))
+    
+    def __compute_energy_containing_scale(self):
+        self.microscale = np.sqrt(np.sum( self.power * self.wavenumber**2 / self.power_norm ))
+    
+    def __compute_peak_scale(self):
+        pass
+    
         
          
 ## ###############################################################
