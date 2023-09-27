@@ -2,18 +2,15 @@
 ## IMPORTS
 ## ###############################################################
 
-import time
-from tkinter import N
-from uu import Error
 from h5py import File
 import numpy as np
 import numpy.polynomial.polynomial as poly
 import timeit
-import derived_var_funcs as dvf
+from .aux_funcs import derived_var_funcs as dvf
 import pandas as pd
 
 ## ###############################################################
-## Global variables
+## Global variabes
 ## ###############################################################
 
 field_lookup_type = {
@@ -538,7 +535,7 @@ class Fields():
         if field_str == "helmholtz":
             self.read("vel")
             
-            F_irrot, F_solen = dvf.helmholtz_decomposition(np.array([self.velx, self.vely, self.velz]))
+            F_irrot, F_solen = helmholtz_decomposition(np.array([self.velx, self.vely, self.velz]))
             
             for coords, idx in enumerate(["x", "y", "z"]):
                 setattr(self, f"vel_comp{coords}", F_irrot[idx])
