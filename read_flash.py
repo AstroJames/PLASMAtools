@@ -2,18 +2,17 @@
 ## IMPORTS
 ## ###############################################################
 
-import time
-from tkinter import N
-from uu import Error
 from h5py import File
 import numpy as np
 import numpy.polynomial.polynomial as poly
 import timeit
-import derived_var_funcs as dvf
+from .aux_funcs import derived_var_funcs as dvf
 import pandas as pd
+from tqdm import tqdm
+from joblib import Parallel, delayed
 
 ## ###############################################################
-## Global variables
+## Global variabes
 ## ###############################################################
 
 field_lookup_type = {
@@ -388,7 +387,7 @@ class Fields():
             init_field = np.zeros(self.n_cells, dtype=np.float32)
         
         if field_str not in var_lookup_table:
-            Error(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
+            raise Exception(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
         
         for field in var_lookup_table[field_str]:    
             setattr(self, field, init_field)
@@ -520,18 +519,35 @@ class Fields():
                 print("derived_var: Characteristic equation calculated.")
 
                 # Calculate eigenvalues using numpy's roots function for a cubic equation
-                coefficients = np.stack([np.ones(a), a, b, c], axis=-1)
+                coefficients = np.stack([np.ones(np.shape(a)), a, b, c], axis=-1)
+                
+                # Reshape coefficients for a flattened spatial dimension
+                coefficients_reshaped = coefficients.reshape(-1, 4)
                 
                 print("derived_var: Calculating the eigenvalues of the Jacobian.")
                 
-                eigenvalues = poly.polyroots(coefficients)
+                # Progress bar setup
+                #pbar = tqdm(total=coefficients_reshaped.shape[0], desc="Computing roots")
+                
+                # define progress bar update
+                def roots_with_progress(i):
+                    return poly.polyroots(coefficients_reshaped[i])
+                
+                #eigenvalues = np.apply_along_axis(roots_with_progress, 1, coefficients_reshaped)
+                #eigenvalues = Parallel(n_jobs=64)(delayed(roots_with_progress)(i) for i in range(coefficients_reshaped.shape[0]))
+                #eigenvalues = np.array(eigenvalues)
+                
+                # Close the progress bar
+                #pbar.close()
                 
                 print("derived_var: Eigenvalues of the Jacobian calculated.")
             
+                #eigenvalues = eigenvalues.reshape(*np.shape(a), 3)
+            
                 # eigenvalues
-                setattr(self, "eig_1", eigenvalues[0][0])
-                setattr(self, "eig_2", eigenvalues[0][1])
-                setattr(self, "eig_3", eigenvalues[0][2])
+                setattr(self, "eig_1", a)#eigenvalues[...,0])
+                setattr(self, "eig_2", b)#eigenvalues[...,1])
+                setattr(self, "eig_3", c)#eigenvalues[...,2])
         else:
             print("Cannot compute the gradient of the magnetic field without reformating the data.")
                 

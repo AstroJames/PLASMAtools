@@ -15,7 +15,6 @@
 import numpy.fft as fft
 import numpy as np
 
-
 ## ###############################################################
 ## Derived Variable Functions
 ## ###############################################################
@@ -62,6 +61,10 @@ def helmholtz_decomposition(F,x):
 
 def vectorCrossProduct(vector1, vector2):
     """
+    Compute the vector cross product of two vectors.
+    
+    Auxillary functions for computeTNBBasis
+    
     Author: Neco Kriel
     """
     vector3 = np.array([
@@ -73,6 +76,10 @@ def vectorCrossProduct(vector1, vector2):
 
 def vectorDotProduct(vector1, vector2):
     """
+    Compute the vector dot product of two vectors.
+    
+    Auxillary functions for computeTNBBasis
+    
     Author: Neco Kriel
     """
     scalar = np.sum([
@@ -83,6 +90,8 @@ def vectorDotProduct(vector1, vector2):
 
 def fieldMagnitude(vector_field):
     """
+    Compute the vector magnitude of a vector.
+    
     Author: Neco Kriel
     """
     vector_field = np.array(vector_field)
@@ -90,6 +99,10 @@ def fieldMagnitude(vector_field):
 
 def gradient_2ocd(field, cell_width, gradient_dir):
     """
+    Compute the gradient of a field in one direction.
+    
+    Auxillary functions for computeTNBBasis
+    
     Author: Neco Kriel
     """
     F = -1 # shift forwards
@@ -100,12 +113,16 @@ def gradient_2ocd(field, cell_width, gradient_dir):
 
 def fieldRMS(scalar_field):
     """
+    Compute the root-mean-squared of a field.
+    
     Author: Neco Kriel
     """
     return np.sqrt(np.mean(scalar_field**2))
 
 def fieldGradient(scalar_field):
     """
+    Compute the gradient of a scalar field.
+    
     Author: Neco Kriel
     """
     ## format: (x, y, z)
@@ -119,6 +136,8 @@ def fieldGradient(scalar_field):
 
 def computeTNBBasis(vector_field):
     """
+    Compute the Fressnet frame of a vector field (TNB basis).
+    
     Author: Neco Kriel
     """
     ## format: (component, x, y, z)
