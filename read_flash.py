@@ -406,9 +406,9 @@ class Fields():
                 self.read("cur")
             
             # calculate the new variable
-            Ex = eta*self.curx/(4*np.pi) - (self.vely*self.magz - self.velz*self.magy) #+eta*self.curx/(4*np.pi) 
-            Ey = eta*self.cury/(4*np.pi) - (self.velz*self.magx - self.velx*self.magz) #+eta*self.cury/(4*np.pi) 
-            Ez = eta*self.curz/(4*np.pi) - (self.velx*self.magy - self.vely*self.magx) #+eta*self.curz/(4*np.pi) 
+            Ex = eta*self.curx/(4*np.pi) - (self.vely*self.magz - self.velz*self.magy) 
+            Ey = eta*self.cury/(4*np.pi) - (self.velz*self.magx - self.velx*self.magz) 
+            Ez = eta*self.curz/(4*np.pi) - (self.velx*self.magy - self.vely*self.magx) 
             
             # write the new variable to the object
             setattr(self, "Ex", Ex)
@@ -565,7 +565,8 @@ class PowerSpectra():
     
     def __init__(self,
                  filename: str) -> None:
-        self.filename: str              = filename
+        self.basefilename: str          = filename
+        self.filename: str              = ""
         self.names: list                = []
         self.skip_lines: int            = []
         self.wavenumber: list           = []
@@ -573,8 +574,35 @@ class PowerSpectra():
         self.correlation_scale: float   = 0.0
         self.microscale: float          = 0.0
         self.peakscale: float           = 0.0
+            
+    def read(self,
+             field_str: str) -> None:
         
-    def set_power_spectra_header(self,
+        skip = 6
+        if field_str == "vel":
+            self.filename = self.basefilename + "_spect_vels.dat" 
+        elif field_str == "mag":
+            self.filename = self.basefilename + "_spect_mags.dat"       
+
+        # set self.names
+        self.__set_power_spectra_header(field_str)
+
+        p_spec = pd.read_table(self.filename,
+                      names=self.names,
+                      skiprows=skip,
+                      sep=r"\s+")
+        self.power      = p_spec["#15_SpectFunctTot"].to_numpy()
+        self.power_trv  = p_spec["#13_SpectFunctTrv"].to_numpy()
+        self.power_lng  = p_spec["#11_SpectFunctLgt"].to_numpy()
+        self.power_norm = np.sum(self.power)
+        self.wavenumber = p_spec["#01_KStag"].to_numpy()
+        
+        self.__compute_correlation_scale()
+        self.__compute_micro_scale()
+        self.__compute_energy_containing_scale()
+        self.__compute_peak_scale()
+        
+    def __set_power_spectra_header(self,
                                  field_str: str) -> None:
         if field_lookup_type[field_str] == "vector":
             self.names = ["#00_BinIndex",
@@ -600,28 +628,6 @@ class PowerSpectra():
                      "#20_CompSpectFunctTrvSigma",
                      "#21_DissSpectFunct",
                      "#22_DissSpectFunctSigma"]
-            self.skip_lines = 6
-    
-    def read(self,
-             field_str: str) -> None:
-        
-
-        self.set_power_spectra_header(field_str)
-        p_spec = pd.read_table(self.filename,
-                               names=self.names,
-                               skiprows=self.skip_lines,
-                               sep=r"\s+")
-        self.power      = p_spec["#15_SpectFunctTot"].to_numpy()
-        self.power_trv  = p_spec["#13_SpectFunctTrv"].to_numpy()
-        self.power_lng  = p_spec["#11_SpectFunctLgt"].to_numpy()
-        self.power_norm = np.sum(self.power)
-        self.wavenumber = p_spec["#01_KStag"].to_numpy()
-        
-        self.__compute_correlation_scale()
-        self.__compute_micro_scale()
-        self.__compute_energy_containing_scale()
-        self.__compute_peak_scale()
-        
         
     def __compute_correlation_scale(self):
         self.correlation_scale = np.sum( self.power_norm /(self.power * self.wavenumber**-1) )
