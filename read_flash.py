@@ -568,10 +568,11 @@ class PowerSpectra():
         self.basefilename: str          = filename
         self.filename: str              = ""
         self.names: list                = []
+        self.skip_lines: int            = []
         self.wavenumber: list           = []
-        self.power:list                 = [] 
+        self.power: list                = [] 
         self.correlation_scale: float   = 0.0
-        self.microscale:float           = 0.0
+        self.microscale: float          = 0.0
         self.peakscale: float           = 0.0
             
     def read(self,
@@ -635,7 +636,7 @@ class PowerSpectra():
         self.microscale = np.sqrt(np.sum( self.power * self.wavenumber**2 / self.power_norm ))
     
     def __compute_energy_containing_scale(self):
-        self.microscale = np.sqrt(np.sum( self.power * self.wavenumber**2 / self.power_norm ))
+        self.microscale = np.sum( self.power * self.wavenumber / self.power_norm )
     
     def __compute_peak_scale(self):
         pass
