@@ -567,10 +567,11 @@ class PowerSpectra():
                  filename: str) -> None:
         self.filename: str              = filename
         self.names: list                = []
+        self.skip_lines: int            = []
         self.wavenumber: list           = []
-        self.power:list                 = [] 
+        self.power: list                = [] 
         self.correlation_scale: float   = 0.0
-        self.microscale:float           = 0.0
+        self.microscale: float          = 0.0
         self.peakscale: float           = 0.0
         
     def set_power_spectra_header(self,
@@ -599,16 +600,17 @@ class PowerSpectra():
                      "#20_CompSpectFunctTrvSigma",
                      "#21_DissSpectFunct",
                      "#22_DissSpectFunctSigma"]
+            self.skip_lines = 6
     
     def read(self,
-             filename: str,
              field_str: str) -> None:
         
-        skip = 6
+
+        self.set_power_spectra_header(field_str)
         p_spec = pd.read_table(self.filename,
-                      names=self.names,
-                      skiprows=skip,
-                      sep=r"\s+")
+                               names=self.names,
+                               skiprows=self.skip_lines,
+                               sep=r"\s+")
         self.power      = p_spec["#15_SpectFunctTot"].to_numpy()
         self.power_trv  = p_spec["#13_SpectFunctTrv"].to_numpy()
         self.power_lng  = p_spec["#11_SpectFunctLgt"].to_numpy()
@@ -617,7 +619,9 @@ class PowerSpectra():
         
         self.__compute_correlation_scale()
         self.__compute_micro_scale()
-        self.__compute_peaks_cale()
+        self.__compute_energy_containing_scale()
+        self.__compute_peak_scale()
+        
         
     def __compute_correlation_scale(self):
         self.correlation_scale = np.sum( self.power_norm /(self.power * self.wavenumber**-1) )
@@ -626,7 +630,7 @@ class PowerSpectra():
         self.microscale = np.sqrt(np.sum( self.power * self.wavenumber**2 / self.power_norm ))
     
     def __compute_energy_containing_scale(self):
-        self.microscale = np.sqrt(np.sum( self.power * self.wavenumber**2 / self.power_norm ))
+        self.microscale = np.sum( self.power * self.wavenumber / self.power_norm )
     
     def __compute_peak_scale(self):
         pass
