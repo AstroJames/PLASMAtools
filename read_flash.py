@@ -2,6 +2,7 @@
 ## IMPORTS
 ## ###############################################################
 
+from uu import Error
 from h5py import File
 import numpy as np
 import numpy.polynomial.polynomial as poly
@@ -298,6 +299,11 @@ class Fields():
         This function sets the reformat flag for the FLASH field data.
         """
         self.reformat = reformat
+        
+    def reformat_error(self,
+                       var: str) -> None:
+        Error(f"Cannot compute {var} without reformating the data.")
+    
 
     def read(self,
              field_str: str,
@@ -364,17 +370,20 @@ class Fields():
             
     def derived_var(self,
                     field_str: str,
-                    eta: float = 0.0,
-                    nu: float = 0.0 ) -> None:
+                    eta: float      = 0.0,
+                    nu: float       = 0.0,
+                    n_workers: int  = 1) -> None:
         
         var_lookup_table = {
             "E": ["Ex","Ey","Ez"],
             "ExB": ["ExBx","ExBy","ExBz"],
             "VxB": ["VxBx","VxBy","VxBz"],
             "jacobian_mag": ["eig_1","eig_2","eig_3"],
-            "helmholtz": ["vel_comx","vel_comy","vel_comz","vel_solx","vel_soly","vel_solz"]
+            "helmholtz": ["vel_comx","vel_comy","vel_comz","vel_solx","vel_soly","vel_solz"],
+            "cur" : ["curx","cury","curz"]
         }
         
+        print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
         # grid data attributes
         # if the data is going to be reformated, preallocate the 3D
         # arrays for the grid data
@@ -548,17 +557,43 @@ class Fields():
                 setattr(self, "eig_1", a)#eigenvalues[...,0])
                 setattr(self, "eig_2", b)#eigenvalues[...,1])
                 setattr(self, "eig_3", c)#eigenvalues[...,2])
-        else:
-            print("Cannot compute the gradient of the magnetic field without reformating the data.")
+            else:
+                self.reformat_error(field_str)
+                
+        if field_str == "cur" or field_str == "bj_angle":
+            
+            if self.reformat:
+            
+                pass #add the definition here
+            
+            else:
+                self.reformat_error(field_str)
+                
+        if field_str == "bj_angle":
+            
+            if self.reformat:
+                self.read("mag")
+                
+                # add definition here
+                
+            else:
+                self.reformat_error(field_str)
+            
+        
                 
         if field_str == "helmholtz":
             self.read("vel")
             
-            F_irrot, F_solen = dvf.helmholtz_decomposition(np.array([self.velx, self.vely, self.velz]))
+            x = np.linspace(-0.5, 0.5, self.velx.shape[0])
+            vel_cube = np.zeros((self.velx.shape[0],self.velx.shape[1],self.velx.shape[2],3))
+            vel_cube[..., 0] = self.velx
+            vel_cube[..., 1] = self.vely
+            vel_cube[..., 2] = self.velz 
+            F_irrot, F_solen = dvf.helmholtz_decomposition(vel_cube,x,n_workers)
             
-            for coords, idx in enumerate(["x", "y", "z"]):
-                setattr(self, f"vel_comp{coords}", F_irrot[idx])
-                setattr(self, f"vel_sol{coords}", F_solen[idx])
+            for idx, coords in enumerate(["x", "y", "z"]):
+                setattr(self, f"vel_comp{coords}", F_irrot[..., idx])
+                setattr(self, f"vel_sol{coords}", F_solen[..., idx])
     
 
 class PowerSpectra():
@@ -709,7 +744,11 @@ def reformat_FLASH_field(field  : np.ndarray,
     
     #time2 = timeit.default_timer()     
     #print(f"The total time it took is: {time2-time1}")
-
+    
+    # swap axes to get the correct orientation
+    # x = 0, y = 1, z = 2
+    field_sorted = np.transpose(field_sorted, (2,1,0))
+    
     if debug:
         print("reformat_FLASH_field: Sorting complete.")
     return field_sorted
