@@ -744,7 +744,11 @@ def reformat_FLASH_field(field  : np.ndarray,
     
     #time2 = timeit.default_timer()     
     #print(f"The total time it took is: {time2-time1}")
-
+    
+    # swap axes to get the correct orientation
+    # x = 0, y = 1, z = 2
+    field_sorted = np.transpose(field_sorted, (2,1,0))
+    
     if debug:
         print("reformat_FLASH_field: Sorting complete.")
     return field_sorted
