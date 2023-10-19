@@ -19,6 +19,9 @@ import numpy as np
 ## Derived Variable Functions
 ## ###############################################################
 
+# indexes
+X,Y,Z = 0,1,2
+
 def helmholtz_decomposition(F: np.ndarray,
                             x: np.ndarray,
                             n_workers: int = 1):
@@ -34,25 +37,25 @@ def helmholtz_decomposition(F: np.ndarray,
     norm       = np.zeros(shape, dtype=np.float64)
     
     # Compute wave numbers
-    kx = fft.fftfreq(shape[0])* 2*np.pi * shape[0] / (x[-1] - x[0])
-    ky = fft.fftfreq(shape[1])* 2*np.pi * shape[1] / (x[-1] - x[0])
-    kz = fft.fftfreq(shape[2])* 2*np.pi * shape[1] / (x[-1] - x[0])
-    KX, KY, KZ = np.meshgrid(kx, ky, kz, indexing='ij')
+    kx = fft.fftfreq(shape[X])* 2*np.pi * shape[X] / (x[-1] - x[0])
+    ky = fft.fftfreq(shape[Y])* 2*np.pi * shape[Y] / (x[-1] - x[0])
+    kz = fft.fftfreq(shape[Z])* 2*np.pi * shape[Z] / (x[-1] - x[0])
+    kX, kY, kZ = np.meshgrid(kx, ky, kz, indexing='ij')
     
     # Avoid division by zero
-    norm = KX**2 + KY**2 + KZ**2
+    norm = kX**2 + kY**2 + kZ**2
     norm[0, 0, 0] = 1
     
     # Compute divergence and curl in Fourier space (note python doesn't seem to want to use i)
-    divFhat = (KX * Fhat[..., 0] + KY * Fhat[..., 1] + KZ * Fhat[..., 2])
+    divFhat = (kX * Fhat[..., X] + kY * Fhat[..., Y] + kZ * Fhat[..., Z])
     
     # Compute irrotational and solenoidal components in Fourier space
-    Fhat_irrot = np.transpose(divFhat * np.array([KX, KY, KZ]) / norm[np.newaxis, ...],(1,2,3,0))
+    Fhat_irrot = np.transpose(divFhat * np.array([kX, kY, kZ]) / norm[np.newaxis, ...],(1,2,3,0))
     Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
     
     # Inverse Fourier transform to real space
-    F_irrot = fft.ifftn(Fhat_irrot, axes=(0, 1, 2),workers=n_workers,norm = 'forward').real
-    F_solen = fft.ifftn(Fhat_solen, axes=(0, 1, 2),workers=n_workers,norm = 'forward').real
+    F_irrot = fft.ifftn(Fhat_irrot, axes=(X,Y,Z),workers=n_workers,norm = 'forward').real
+    F_solen = fft.ifftn(Fhat_solen, axes=(X,Y,Z),workers=n_workers,norm = 'forward').real
     
     # Remove numerical noise
     threshold = 1e-16
@@ -61,6 +64,36 @@ def helmholtz_decomposition(F: np.ndarray,
     
     return F_irrot, F_solen
 
+def curl(field):
+    """
+    Compute the vector curl
+    
+    Author: James Beattie
+    """
+    # indexes
+    x,y,z = 0,1,2
+    
+    # differentials
+    two_dx = 2./field[0].shape[0]
+    two_dy = 2./field[1].shape[0]
+    two_dz = 2./field[2].shape[0]
+    
+    # x component of curl
+    dFz_dy = (np.roll(field[z],-1,axis=y) - np.roll(field[z],1,axis=y))/two_dy
+    dFy_dz = (np.roll(field[y],-1,axis=z) - np.roll(field[y],1,axis=z))/two_dz
+    
+    # y component of curl
+    dFx_dz = (np.roll(field[x],-1,axis=z) - np.roll(field[x],1,axis=z))/two_dz
+    dFz_dx = (np.roll(field[z],-1,axis=x) - np.roll(field[z],1,axis=x))/two_dx
+    
+    # z component of curl
+    dFy_dx = (np.roll(field[y],-1,axis=x) - np.roll(field[y],1,axis=x))/two_dx
+    dFx_dy = (np.roll(field[x],-1,axis=y) - np.roll(field[x],1,axis=y))/two_dy
+    
+    return np.array([dFz_dy - dFy_dz,
+                     dFx_dz - dFz_dx,
+                     dFy_dx - dFx_dy])
+    
 def vectorCrossProduct(vector1, vector2):
     """
     Compute the vector cross product of two vectors.
@@ -70,11 +103,11 @@ def vectorCrossProduct(vector1, vector2):
     Author: Neco Kriel
     """
     vector3 = np.array([
-    vector1[1] * vector2[2] - vector1[2] * vector2[1],
-    vector1[2] * vector2[0] - vector1[0] * vector2[2],
-    vector1[0] * vector2[1] - vector1[1] * vector2[0]
+    vector1[Y] * vector2[Z] - vector1[Z] * vector2[Y],
+    vector1[Z] * vector2[X] - vector1[X] * vector2[Y],
+    vector1[X] * vector2[Y] - vector1[Y] * vector2[X]
     ])
-    return vector3
+    return vector3    
 
 def vectorDotProduct(vector1, vector2):
     """
