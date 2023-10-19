@@ -12,20 +12,22 @@
 ## IMPORTS
 ## ###############################################################
 
-import numpy.fft as fft
+import scipy.fft as fft
 import numpy as np
 
 ## ###############################################################
 ## Derived Variable Functions
 ## ###############################################################
 
-def helmholtz_decomposition(F,x):
+def helmholtz_decomposition(F: np.ndarray,
+                            x: np.ndarray,
+                            n_workers: int = 1):
     """
     Author: James Beattie
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
     shape = F.shape[:-1]
-    Fhat = fft.fftn(F, axes=(0, 1, 2),norm = 'forward')
+    Fhat = fft.fftn(F, axes=(0, 1, 2),norm = 'forward',workers=n_workers)
     
     Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
     Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
@@ -49,8 +51,8 @@ def helmholtz_decomposition(F,x):
     Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
     
     # Inverse Fourier transform to real space
-    F_irrot = fft.ifftn(Fhat_irrot, axes=(0, 1, 2)).real
-    F_solen = fft.ifftn(Fhat_solen, axes=(0, 1, 2)).real
+    F_irrot = fft.ifftn(Fhat_irrot, axes=(0, 1, 2),workers=n_workers,norm = 'forward').real
+    F_solen = fft.ifftn(Fhat_solen, axes=(0, 1, 2),workers=n_workers,norm = 'forward').real
     
     # Remove numerical noise
     threshold = 1e-16
