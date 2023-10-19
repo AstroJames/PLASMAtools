@@ -2,6 +2,8 @@ from FLASHtools.read_flash import Fields
 import matplotlib.pyplot as plt
 import numpy as np
 from celluloid import Camera
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 
 def energy_evolution(filename_structure, file_identifier_digits, max_timestep, directory):
     """Plots average ratio of mag to kin energy as a function of the timestep. Returns a plot and saves it
@@ -77,16 +79,19 @@ def Animate_Data2D(filename_structure, file_identifier_digits, max_timestep, dir
         fps to render the animation videoa as.
     """    
     #initialize definitions
-    fig = plt.figure()
+    fig,ax = plt.subplots()
+    div = make_axes_locatable(ax)
+    cax = div.append_axes('right', '5%', '5%')
     camera = Camera(fig)
 
-    #array for possible
+    #array for possible quantities
     possible_quantities = ['dens', 'vel', 'mag']
     
-
+    #compute for each timestep
     for i in np.arange(0,max_timestep+1):
-        filename = 	str(filename_structure) + str(str("%0" + file_identifier_digits +"d") % i)
         #read data
+        filename = 	str(filename_structure) + str(str("%0" + file_identifier_digits +"d") % i)
+        #initialize class
         turb = Fields(str(directory) + filename, reformat = True)
         if quantity in possible_quantities:
             #turb.read(quantity)
@@ -101,8 +106,8 @@ def Animate_Data2D(filename_structure, file_identifier_digits, max_timestep, dir
             
             #determine ratio
             energy_density = mag_energy/kin_energy
-            #create slice           
-            
+
+            #create slice                       
             if slice_axis == '0':
                 slice = energy_density[slice_value,:,:]
             elif slice_axis == '1':
@@ -112,11 +117,14 @@ def Animate_Data2D(filename_structure, file_identifier_digits, max_timestep, dir
             else:
                 raise ValueError('Invalid axis. Please choose from 0,1,2 for x,y,z respectively.')
             
-            plt.imshow(slice)
+            #take snapshot for animation
+            image = ax.imshow(np.log(slice), cmap = 'inferno', origin = 'lower', vmin=-20, vmax=8)
+            fig.colorbar(image, cax = cax)
             camera.snap()
 
         else:
             raise ValueError('Invalid quantity. Please choose from dens, vel, mag')
+    #create animation
     animation = camera.animate()
     animation.save('animation.mp4', fps=fps_value)
 
