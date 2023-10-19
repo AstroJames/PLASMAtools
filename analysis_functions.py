@@ -128,6 +128,75 @@ def Animate_Data2D(filename_structure, file_identifier_digits, max_timestep, dir
     animation = camera.animate()
     animation.save('animation.mp4', fps=fps_value)
 
+def compute_derivative(axis, data):
+    """Will compute the derivative along the specified coordinate axis to the given data array.
+        This function assumes the length scale of entire box is normalized to 1. 
+
+    Parameters
+    ----------
+    axis : int
+        0,1,2, corresponding to x,y,z axes respectively
+    data : array
+        3D spacial array of data to be differentiated
+    """
+    derivative  = (np.roll(data, +1, axis) - np.roll(data, -1, axis))/(1/np.shape(data)[0])
+    return derivative
+
+
+def compute_current_density(B_vector):
+    """Will compute the current density given the magnetic field components. Returns the current vector
+
+    Parameters
+    ----------
+    B_vector : array
+        the components of B, given in a spacial 3D arrangement as [Bx,By,Bz]
+    """
+    #compute the derivative of the magnetic field components
+    dBx_dx = compute_derivative(0, B_vector[0,:,:,:])
+    dBx_dy = compute_derivative(1, B_vector[0,:,:,:])
+    dBx_dz = compute_derivative(2, B_vector[0,:,:,:])
+    dBy_dx = compute_derivative(0, B_vector[1,:,:,:])
+    dBy_dy = compute_derivative(1, B_vector[1,:,:,:])
+    dBy_dz = compute_derivative(2, B_vector[1,:,:,:])
+    dBz_dx = compute_derivative(0, B_vector[2,:,:,:])
+    dBz_dy = compute_derivative(1, B_vector[2,:,:,:])
+    dBz_dz = compute_derivative(2, B_vector[2,:,:,:])
+
+    #compute the current density components
+    Jx = (1/(4*np.pi))*(dBz_dy - dBy_dz)
+    Jy = (1/(4*np.pi))*(dBx_dz - dBz_dx)
+    Jz = (1/(4*np.pi))*(dBy_dx - dBx_dy)
+
+    return ([Jx,Jy,Jz])
+
+
+def dot_product(vector_a, vector_b):
+    """Will compute the dot product of two vectors
+
+    Parameters
+    ----------
+    vector_a : array
+        3D spacial array of vector components
+    vector_b : array
+        3D spacial array of vector components
+    """
+    vector_a = np.array(vector_a)
+    vector_b = np.array(vector_b)
+    return (np.sum(vector_a*vector_b, axis = 0))
+
+def vector_angle(vector_a, vector_b):
+    """Will compute the angle between two vectors
+
+    Parameters
+    ----------
+    vector_a : array
+        3D spacial array of vector components
+    vector_b : array
+        3D spacial array of vector components
+    """
+    vector_a = np.array(vector_a)
+    vector_b = np.array(vector_b)
+    return np.arccos(dot_product(vector_a, vector_b)/(np.sqrt(dot_product(vector_a, vector_a))*np.sqrt(dot_product(vector_b, vector_b))))
 
 
 
