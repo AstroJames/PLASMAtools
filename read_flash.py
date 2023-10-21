@@ -380,7 +380,8 @@ class Fields():
             "VxB": ["VxBx","VxBy","VxBz"],
             "jacobian_mag": ["eig_1","eig_2","eig_3"],
             "helmholtz": ["vel_comx","vel_comy","vel_comz","vel_solx","vel_soly","vel_solz"],
-            "cur" : ["curx","cury","curz"]
+            "cur" : ["curx","cury","curz"],
+            "bj_angle" : ["bj_angle"]
         }
         
         print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
@@ -563,8 +564,23 @@ class Fields():
         if field_str == "cur" or field_str == "bj_angle":
             
             if self.reformat:
-            
-                pass #add the definition here
+                self.read("mag")
+                B_vector = [self.magx, self.magy, self.magz]
+                db_matrix = np.zeros([3,3,self.magx.shape[0],self.magx.shape[1],self.magx.shape[2]])
+
+                #computes the derivative dBi/dxj organized as a matrix
+                #assumes data is a cube
+                for i in range(3):
+                    for j in range(3):
+                        db_matrix[i, j,:,:,:] = dvf.gradient_2ocd(B_vector[i], cell_width=1/self.magx.shape[0], gradient_dir=j)
+                #compute the current 
+                Jx = (1/(4*np.pi))*(db_matrix[2][1] - db_matrix[1][2])
+                Jy = (1/(4*np.pi))*(db_matrix[0][2] - db_matrix[2][0])
+                Jz = (1/(4*np.pi))*(db_matrix[1][0] - db_matrix[0][1])
+
+                setattr(self, "curx", Jx)
+                setattr(self, "cury", Jy)
+                setattr(self, "curz", Jz)
             
             else:
                 self.reformat_error(field_str)
@@ -573,8 +589,11 @@ class Fields():
             
             if self.reformat:
                 self.read("mag")
+                self.derived_var("cur")
                 
-                # add definition here
+                #compute the angle between the current and magnetic field
+                angle = dvf.vector_angle([self.curx, self.cury, self.curz], [self.magx, self.magy, self.magz])
+                setattr(self, "bj_angle", angle)
                 
             else:
                 self.reformat_error(field_str)

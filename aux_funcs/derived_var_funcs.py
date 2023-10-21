@@ -89,6 +89,20 @@ def vectorDotProduct(vector1, vector2):
         for v1_comp, v2_comp in zip(vector1, vector2)
     ], axis=0)
     return scalar
+def vector_angle(vector_a, vector_b):
+    """Will compute the angle between two vectors
+
+    Parameters
+    ----------
+    vector_a : array
+        3D spacial array of vector components
+    vector_b : array
+        3D spacial array of vector components
+    """
+    vector_a = np.array(vector_a)
+    vector_b = np.array(vector_b)
+    return np.arccos(vectorDotProduct(vector_a, vector_b)/(np.sqrt(vectorDotProduct(vector_a, vector_a))\
+                                                           *np.sqrt(vectorDotProduct(vector_b, vector_b))))
 
 def fieldMagnitude(vector_field):
     """
