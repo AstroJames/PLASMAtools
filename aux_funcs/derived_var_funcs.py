@@ -19,6 +19,10 @@ import numpy as np
 ## Derived Variable Functions
 ## ###############################################################
 
+#Defined for notational convenience
+X, Y, Z = 0, 1, 2
+
+
 def helmholtz_decomposition(F: np.ndarray,
                             x: np.ndarray,
                             n_workers: int = 1):
@@ -27,16 +31,16 @@ def helmholtz_decomposition(F: np.ndarray,
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
     shape = F.shape[:-1]
-    Fhat = fft.fftn(F, axes=(0, 1, 2),norm = 'forward',workers=n_workers)
+    Fhat = fft.fftn(F, axes=(X, Y, Z),norm = 'forward',workers=n_workers)
     
     Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
     Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
     norm       = np.zeros(shape, dtype=np.float64)
     
     # Compute wave numbers
-    kx = fft.fftfreq(shape[0])* 2*np.pi * shape[0] / (x[-1] - x[0])
-    ky = fft.fftfreq(shape[1])* 2*np.pi * shape[1] / (x[-1] - x[0])
-    kz = fft.fftfreq(shape[2])* 2*np.pi * shape[1] / (x[-1] - x[0])
+    kx = fft.fftfreq(shape[X])* 2*np.pi * shape[X] / (x[-1] - x[0])
+    ky = fft.fftfreq(shape[Y])* 2*np.pi * shape[Y] / (x[-1] - x[0])
+    kz = fft.fftfreq(shape[Z])* 2*np.pi * shape[Z] / (x[-1] - x[0])
     KX, KY, KZ = np.meshgrid(kx, ky, kz, indexing='ij')
     
     # Avoid division by zero
@@ -51,8 +55,8 @@ def helmholtz_decomposition(F: np.ndarray,
     Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
     
     # Inverse Fourier transform to real space
-    F_irrot = fft.ifftn(Fhat_irrot, axes=(0, 1, 2),workers=n_workers,norm = 'forward').real
-    F_solen = fft.ifftn(Fhat_solen, axes=(0, 1, 2),workers=n_workers,norm = 'forward').real
+    F_irrot = fft.ifftn(Fhat_irrot, axes=(X, Y, Z),workers=n_workers,norm = 'forward').real
+    F_solen = fft.ifftn(Fhat_solen, axes=(X, Y, Z),workers=n_workers,norm = 'forward').real
     
     # Remove numerical noise
     threshold = 1e-16
@@ -70,9 +74,9 @@ def vectorCrossProduct(vector1, vector2):
     Author: Neco Kriel
     """
     vector3 = np.array([
-    vector1[1] * vector2[2] - vector1[2] * vector2[1],
-    vector1[2] * vector2[0] - vector1[0] * vector2[2],
-    vector1[0] * vector2[1] - vector1[1] * vector2[0]
+    vector1[Y] * vector2[Z] - vector1[Z] * vector2[Y],
+    vector1[Z] * vector2[X] - vector1[X] * vector2[Z],
+    vector1[X] * vector2[Y] - vector1[Y] * vector2[X]
     ])
     return vector3
 
@@ -146,7 +150,7 @@ def fieldGradient(scalar_field):
     cell_width = 1 / scalar_field.shape[0]
     field_gradient = [
         gradient_2ocd(scalar_field, cell_width, gradient_dir)
-        for gradient_dir in [0, 1, 2]
+        for gradient_dir in [X, Y, Z]
     ]
     return np.array(field_gradient)
 

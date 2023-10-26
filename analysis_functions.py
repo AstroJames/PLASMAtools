@@ -198,6 +198,93 @@ def vector_angle(vector_a, vector_b):
     vector_b = np.array(vector_b)
     return np.arccos(dot_product(vector_a, vector_b)/(np.sqrt(dot_product(vector_a, vector_a))*np.sqrt(dot_product(vector_b, vector_b))))
 
+def pi_axis_formatter(val, pos, denomlim=10, pi=r'\pi'):
+    """ REQUIRED BY angle_pdf() FUNCTION
+    format label properly with pi values
+    for example: 0.6666 pi --> 2π/3
+               : 0      pi --> 0
+               : 0.50   pi --> π/2  
+    """
+    minus = "-" if val < 0 else ""
+    val = abs(val)
+    ratio = frac(val/np.pi).limit_denominator(denomlim)
+    n, d = ratio.numerator, ratio.denominator
+    
+    fmt2 = "%s" % d 
+    if n == 0:
+        fmt1 = "0"
+    elif n == 1:
+        fmt1 = pi
+    else:
+        fmt1 = r"%s%s" % (n,pi)
+        
+    fmtstring = "$" + minus + (fmt1 if d == 1 else r"{%s}/{%s}" % (fmt1, fmt2)) + "$"
+    
+    return fmtstring
 
+
+
+def angle_pdf(filepath, timesteps, bins, save=False, animate = False):
+    """Creates the probability distribution function of the angle between J and B for a list of timesteps
+
+        Returns either a plot of all specified timesteps, or an animation that shows the evolution through the
+        timesteps.
+
+    Parameters
+    ----------
+    filepath : str
+        string of filepath to data folder
+    timesteps : array
+        array containing the timesteps wished to be plotted
+    bins : int
+        number of bins to be used in the histogram
+    save : bool, optional
+        If True, will save the animation/plot as a .mp4//pdf file in the working directory. The default is False.
+    animate : bool, optional
+        If True, the output of the function will be an animated plot instead of a static plot. The default is False.
+    """
+    fig = plt.figure(figsize=(7,5))  
+    ax = plt.gca()
+    camera = Camera(fig)
+    plt.xlim(0,np.pi)
+    plt.ylim(0,0.75)
+    ticklen = np.pi/3
+
+    # setting ticks labels
+    ax.xaxis.set_major_formatter(FuncFormatter(pi_axis_formatter))
+    # setting ticks at proper numbers
+    ax.xaxis.set_major_locator(MultipleLocator(base=ticklen))
+
+    for i in timesteps:
+        filename = 	str('Turb_hdf5_plt_cnt_') + str(str("%0" + str(4) +"d") % i)
+
+        #read data
+        turb = Fields(str(filepath) + filename, reformat = True)
+        turb.derived_var("bj_angle")
+        angle = turb.bj_angle
+
+        #flatten the angle array
+        angle = angle.flatten()
+
+        #create histogram
+        plt.title("Probability Density of $J$, $B$ Angle")
+        plot = plt.hist(angle, bins = bins, density = True, histtype = 'step', color='black', label = "Timestep " + str(i))        
+        plt.xlabel('Angle between $J$ and $B$ (radians)')
+        plt.ylabel('Probability')
+        if animate == True:
+            plt.legend(plot[2], [f'Timestep {i}'])  #need to index plot object by 2 in order for matplotlib to properly display labels
+            camera.snap()
+        else:
+            plt.legend()
+
+    if animate == True:   
+        animation = camera.animate()
+        plt.show()
+        if save == True:
+            animation.save('current_anglepdf.mp4', writer = 'ffmpeg', fps=3) 
+    else:
+        plt.show()
+        if save == True:
+            plt.savefig('current_anglepdf.pdf')
 
 

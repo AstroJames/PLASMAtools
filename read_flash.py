@@ -16,6 +16,9 @@ from joblib import Parallel, delayed
 ## Global variabes
 ## ###############################################################
 
+#For notational convenience
+X, Y, Z = 0, 1, 2
+
 field_lookup_type = {
     "dens": "scalar",
     "dvvl": "scalar",
@@ -475,34 +478,34 @@ class Fields():
                 print("derived_var: Calculating the Jacobian of the magnetic field.")
                 
                 # x components
-                dBx_dx = (np.roll(self.magx, -1, axis=0) - np.roll(self.magx, 1, axis=0))/two_dX
-                dBx_dy = (np.roll(self.magx, -1, axis=1) - np.roll(self.magx, 1, axis=1))/two_dY
-                dBx_dz = (np.roll(self.magx, -1, axis=2) - np.roll(self.magx, 1, axis=2))/two_dZ
+                dBx_dx = (np.roll(self.magx, -1, axis=X) - np.roll(self.magx, 1, axis=X))/two_dX
+                dBx_dy = (np.roll(self.magx, -1, axis=Y) - np.roll(self.magx, 1, axis=Y))/two_dY
+                dBx_dz = (np.roll(self.magx, -1, axis=Z) - np.roll(self.magx, 1, axis=Z))/two_dZ
                 
                 # y components
-                dBy_dx = (np.roll(self.magy, -1, axis=0) - np.roll(self.magy, 1, axis=0))/two_dX
-                dBy_dy = (np.roll(self.magy, -1, axis=1) - np.roll(self.magy, 1, axis=1))/two_dY
-                dBy_dz = (np.roll(self.magy, -1, axis=2) - np.roll(self.magy, 1, axis=2))/two_dZ
+                dBy_dx = (np.roll(self.magy, -1, axis=X) - np.roll(self.magy, 1, axis=X))/two_dX
+                dBy_dy = (np.roll(self.magy, -1, axis=Y) - np.roll(self.magy, 1, axis=Y))/two_dY
+                dBy_dz = (np.roll(self.magy, -1, axis=Z) - np.roll(self.magy, 1, axis=Z))/two_dZ
                 
                 # z components
-                dBz_dx = (np.roll(self.magz, -1, axis=0) - np.roll(self.magz, 1, axis=0))/two_dX
-                dBz_dy = (np.roll(self.magz, -1, axis=1) - np.roll(self.magz, 1, axis=1))/two_dY
-                dBz_dz = (np.roll(self.magz, -1, axis=2) - np.roll(self.magz, 1, axis=2))/two_dZ
+                dBz_dx = (np.roll(self.magz, -1, axis=X) - np.roll(self.magz, 1, axis=X))/two_dX
+                dBz_dy = (np.roll(self.magz, -1, axis=Y) - np.roll(self.magz, 1, axis=Y))/two_dY
+                dBz_dz = (np.roll(self.magz, -1, axis=Z) - np.roll(self.magz, 1, axis=Z))/two_dZ
                 
                 # Jacobian
-                Jacobian = np.zeros((self.magx.shape[0], 
-                                    self.magx.shape[1], 
-                                    self.magx.shape[2], 3, 3))
+                Jacobian = np.zeros((self.magx.shape[X], 
+                                    self.magx.shape[Y], 
+                                    self.magx.shape[Z], 3, 3))
                 
-                Jacobian[..., 0, 0] = dBx_dx
-                Jacobian[..., 0, 1] = dBx_dy
-                Jacobian[..., 0, 2] = dBx_dz
-                Jacobian[..., 1, 0] = dBy_dx
-                Jacobian[..., 1, 1] = dBy_dy
-                Jacobian[..., 1, 2] = dBy_dz
-                Jacobian[..., 2, 0] = dBz_dx
-                Jacobian[..., 2, 1] = dBz_dy
-                Jacobian[..., 2, 2] = dBz_dz
+                Jacobian[..., X, X] = dBx_dx
+                Jacobian[..., X, Y] = dBx_dy
+                Jacobian[..., X, Z] = dBx_dz
+                Jacobian[..., Y, X] = dBy_dx
+                Jacobian[..., Y, Y] = dBy_dy
+                Jacobian[..., Y, Z] = dBy_dz
+                Jacobian[..., Z, X] = dBz_dx
+                Jacobian[..., Z, Y] = dBz_dy
+                Jacobian[..., Z, Z] = dBz_dz
                 
                 print("derived_var: Jacobian of the magnetic field calculated.")
             
@@ -566,17 +569,17 @@ class Fields():
             if self.reformat:
                 self.read("mag")
                 B_vector = [self.magx, self.magy, self.magz]
-                db_matrix = np.zeros([3,3,self.magx.shape[0],self.magx.shape[1],self.magx.shape[2]])
+                db_matrix = np.zeros([3,3,self.magx.shape[X],self.magx.shape[Y],self.magx.shape[Z]])
 
                 #computes the derivative dBi/dxj organized as a matrix
                 #assumes data is a cube
                 for i in range(3):
                     for j in range(3):
-                        db_matrix[i, j,:,:,:] = dvf.gradient_2ocd(B_vector[i], cell_width=1/self.magx.shape[0], gradient_dir=j)
+                        db_matrix[i, j,:,:,:] = dvf.gradient_2ocd(B_vector[i], cell_width=1/self.magx.shape[X], gradient_dir=j)
                 #compute the current 
-                Jx = (1/(4*np.pi))*(db_matrix[2][1] - db_matrix[1][2])
-                Jy = (1/(4*np.pi))*(db_matrix[0][2] - db_matrix[2][0])
-                Jz = (1/(4*np.pi))*(db_matrix[1][0] - db_matrix[0][1])
+                Jx = (1/(4*np.pi))*(db_matrix[Z][Y] - db_matrix[Y][Z])
+                Jy = (1/(4*np.pi))*(db_matrix[X][Z] - db_matrix[Z][X])
+                Jz = (1/(4*np.pi))*(db_matrix[Y][X] - db_matrix[X][Y])
 
                 setattr(self, "curx", Jx)
                 setattr(self, "cury", Jy)
@@ -604,10 +607,10 @@ class Fields():
             self.read("vel")
             
             x = np.linspace(-0.5, 0.5, self.velx.shape[0])
-            vel_cube = np.zeros((self.velx.shape[0],self.velx.shape[1],self.velx.shape[2],3))
-            vel_cube[..., 0] = self.velx
-            vel_cube[..., 1] = self.vely
-            vel_cube[..., 2] = self.velz 
+            vel_cube = np.zeros((self.velx.shape[X],self.velx.shape[Y],self.velx.shape[Z],3))
+            vel_cube[..., X] = self.velx
+            vel_cube[..., Y] = self.vely
+            vel_cube[..., Z] = self.velz 
             F_irrot, F_solen = dvf.helmholtz_decomposition(vel_cube,x,n_workers)
             
             for idx, coords in enumerate(["x", "y", "z"]):
@@ -765,8 +768,7 @@ def reformat_FLASH_field(field  : np.ndarray,
     #print(f"The total time it took is: {time2-time1}")
     
     # swap axes to get the correct orientation
-    # x = 0, y = 1, z = 2
-    field_sorted = np.transpose(field_sorted, (2,1,0))
+    field_sorted = np.transpose(field_sorted, (Z,Y,X))
     
     if debug:
         print("reformat_FLASH_field: Sorting complete.")
