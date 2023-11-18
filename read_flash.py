@@ -379,8 +379,11 @@ class Fields():
             "ExB": ["ExBx","ExBy","ExBz"],
             "VxB": ["VxBx","VxBy","VxBz"],
             "jacobian_mag": ["eig_1","eig_2","eig_3"],
-            "helmholtz": ["vel_comx","vel_comy","vel_comz","vel_solx","vel_soly","vel_solz"],
-            "cur" : ["curx","cury","curz"]
+            "helmholtz": ["vel_comx","vel_comy","vel_comz",
+                          "vel_solx","vel_soly","vel_solz"],
+            "cur" : ["curx","cury","curz"],
+            "mXc" : ["mXcx","mXcy","mXcz"],
+            "lorentz" : ["lorx","lory","lorz"]
         }
         
         print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
@@ -395,11 +398,42 @@ class Fields():
             # otherwise, preallocate the 1D arrays for the grid data
             init_field = np.zeros(self.n_cells, dtype=np.float32)
         
+        print(field_str)
         if field_str not in var_lookup_table:
             raise Exception(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
         
         for field in var_lookup_table[field_str]:    
             setattr(self, field, init_field)
+            
+        if field_str == "mXc":
+            if self.reformat:
+                self.read("mag")
+                if self.curx[0,0,0] == 0.0:
+                    self.derived_var("cur")
+                mXc = dvf.vectorCrossProduct([self.magx,
+                                              self.magy,
+                                              self.magz],
+                                             [(1/(4*np.pi))*self.curx,
+                                              (1/(4*np.pi))*self.cury,
+                                              (1/(4*np.pi))*self.curz])
+                # write the new variable to the object
+                for idx, coord in enumerate(["x","y,","z"]):
+                    setattr(self, f"mXc{coord}", mXc[idx])          
+            else:
+                self.reformat_error(field_str)
+        if field_str == "lorentz":
+            if self.reformat:
+                self.read("mag")
+                self.derived_var("cur")
+                lor = dvf.vectorCrossProduct([(1/(4*np.pi))*self.curx,
+                                              (1/(4*np.pi))*self.cury,
+                                              (1/(4*np.pi))*self.curz],
+                                             [self.magx,
+                                              self.magy,
+                                              self.magz]) 
+                # write the new variable to the object
+                for idx, coord in enumerate(["x","y,","z"]):
+                    setattr(self, f"lor{coord}", lor[idx])          
             
         # Variable definitions
         if field_str == "E" or field_str == "ExB":
@@ -412,7 +446,11 @@ class Fields():
             self.read("vel")
             self.read("mag")
             if eta != 0.0:
-                self.read("cur")
+                try:
+                    self.read("cur")
+                except:
+                    Warning(f"derived_var: current does not exist, deriving it")
+                    self.derived_var("cur")
             
             # calculate the new variable
             Ex = eta*self.curx/(4*np.pi) - (self.vely*self.magz - self.velz*self.magy) 
@@ -543,7 +581,7 @@ class Fields():
                     return poly.polyroots(coefficients_reshaped[i])
                 
                 #eigenvalues = np.apply_along_axis(roots_with_progress, 1, coefficients_reshaped)
-                #eigenvalues = Parallel(n_jobs=64)(delayed(roots_with_progress)(i) for i in range(coefficients_reshaped.shape[0]))
+                #eigenvalues = Parallel(n_jobs=n_workers)(delayed(roots_with_progress)(i) for i in range(coefficients_reshaped.shape[0]))
                 #eigenvalues = np.array(eigenvalues)
                 
                 # Close the progress bar
@@ -560,16 +598,20 @@ class Fields():
             else:
                 self.reformat_error(field_str)
                 
-        if field_str == "cur" or field_str == "bj_angle":
+        if field_str == "cur":
             
             if self.reformat:
-            
-                pass #add the definition here
-            
+                self.read("mag")
+                cur = dvf.curl([self.magx, self.magy, self.magz])
+                setattr(self, "curx", cur[0])
+                setattr(self, "cury", cur[1])
+                setattr(self, "curz", cur[2])
             else:
                 self.reformat_error(field_str)
                 
         if field_str == "bj_angle":
+            if self.curx[0,0,0] == 0.0:
+                self.derived_var("cur")
             
             if self.reformat:
                 self.read("mag")
@@ -579,8 +621,7 @@ class Fields():
             else:
                 self.reformat_error(field_str)
             
-        
-                
+            
         if field_str == "helmholtz":
             self.read("vel")
             

@@ -43,8 +43,8 @@ def compute_power_spectrum_3D(volume: np.ndarray) -> np.ndarray:
     
     return power_spectrum_3D
 
-def radial_integrate(data: np.ndarray,
-                     bins: int = None) -> tuple:    
+def radial_integrate(data: np.ndarray, 
+                     bins: int = None) -> tuple:
     """
     This radial integrate function takes the 3D power spectrum and integrates
     over spherical shells of constant k. The result is a 1D power spectrum.
@@ -57,7 +57,8 @@ def radial_integrate(data: np.ndarray,
     will be off by a small amount (roughly factor 2 for 128^3 with postive power-law indexes). 
     This is because the frequencies beyond the Nyquist limit are not included in the radial 
     integration. This is not a problem for grids of 256^3 or larger, or for k^-a style spectra,
-    which are far more commonly encountered.
+    which are far more commonly encountered, and the normalisation is closer to 1/10,000 numerical
+    error
     
     Args:
         data: The 3D power spectrum
@@ -68,28 +69,32 @@ def radial_integrate(data: np.ndarray,
         k_modes: The k modes corresponding to the radial integration
         radial_sum: The radial integration of the 3D power spectrum (including k^2 correction)
     """
-    
-    # Compute the radial coordinate for every grid point
-    z,y,x = np.indices(data.shape)
-    center = np.array([(i-1)/2.0 for i in data.shape])
-    r = np.sqrt((x - center[0])**2 + (y-center[1])**2 + (z-center[2])**2)
-    r = r.astype(int)
+    z, y, x = np.indices(data.shape)
+    center = np.array([(i - 1) / 2.0 for i in data.shape])
+    r = np.sqrt((x - center[0])**2 + (y - center[1])**2 + (z - center[2])**2)
 
-    # If bins aren't specified, choose the Nyquist limit (N//2)
     N = data.shape[0]
     if not bins:
-        bins = N//2
+        bins = N // 2
 
-    # Compute the radial profile (radial integrate)
-    # note a subtly here, the k^2 correction is already in this sum simply
-    # because the k mode density scales with k^2dk (dk=1 here)
-    radial_sum = np.bincount(r.ravel(), data.ravel(), minlength=bins)
+    # Define bin edges
+    max_r = N // 2
+    bin_edges = np.linspace(0.5, max_r, bins+1)
+
+    # Use np.digitize to assign each element to a bin
+    bin_indices = np.digitize(r, bin_edges)
+
+    # Compute the radial profile
+    radial_sum = np.zeros(bins)
+    for i in range(1, bins+1):
+        mask = bin_indices == i
+        radial_sum[i-1] = np.sum(data[mask])
 
     # Generate the spatial frequencies with dk=1
-    k_modes = np.arange(1, bins+1)  # This gives the center of each bin
+    # Now k_modes represent the bin centers
+    k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
 
-    return k_modes, radial_sum[:bins]
-
+    return k_modes, radial_sum
 
 def generate_powerlaw_field(size:  int,
                             alpha: float = 5./3.) -> np.ndarray:
