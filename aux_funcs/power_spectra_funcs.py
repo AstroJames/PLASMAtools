@@ -77,9 +77,7 @@ def radial_integrate(data: np.ndarray,
     if not bins:
         bins = N // 2
 
-    # Define bin edges
-    max_r = N // 2
-    bin_edges = np.linspace(0.5, max_r, bins+1)
+    bin_edges = np.linspace(0.5, bins, bins+1)
 
     # Use np.digitize to assign each element to a bin
     bin_indices = np.digitize(r, bin_edges)
@@ -95,6 +93,145 @@ def radial_integrate(data: np.ndarray,
     k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
 
     return k_modes, radial_sum
+
+def helical_decomposition(vector_field):
+    """
+    Performs a helical decomposition of a vector field.
+
+    Parameters:
+    velocity_field (array-like): The velocity field corresponding to each k, an array of shape (N, 3).
+
+    Returns:
+    u_plus (array): The component of the vector field in the direction of the right-handed helical component.
+    u_minus (array): The component of the vector field in the direction of the left-handed helical component.
+    """
+    # Convert inputs to numpy arrays
+    vector_field = np.asarray(vector_field)
+    
+    # Take FFT of vector field
+    vector_field_FFT = fft.fftn(vector_field,
+                                norm='forward',
+                                axes=(0,1,2))
+    N = vector_field.shape[0]  # Assuming a cubic domain
+    L = 1  # The physical size of the domain
+    kx = fft.fftfreq(N, d=L/N)
+    ky = fft.fftfreq(N, d=L/N)
+    kz = fft.fftfreq(N, d=L/N)
+    
+    kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
+    k = np.stack((kx, ky, kz), axis=-1)  # This will be of shape (N, N, N, 3)
+
+    # Normalize k to get the unit wavevector
+    k_norm = np.linalg.norm(k, axis=-1, keepdims=True)
+
+    if np.any(np.isnan(k_norm)) or np.any(np.isinf(k_norm)):
+        raise ValueError("NaN or Inf found in k_norm")    
+
+    # Set the k_hat for zero wavevectors explicitly to zero (or some other appropriate value)
+    k_hat = np.zeros_like(k)
+    non_zero_indices = k_norm.squeeze() > 0  # Indices where the norm is non-zero
+    k_hat[non_zero_indices] = k[non_zero_indices] / k_norm[non_zero_indices]
+    
+    if np.any(np.isnan(k_hat)) or np.any(np.isinf(k_hat)):
+        raise ValueError("NaN or Inf found in k_hat")
+
+    # Choose an arbitrary versor orthogonal to k
+    z = np.array([0, 0, 1])
+    e = np.cross(z, k_hat)
+    e_norm = np.linalg.norm(e, axis=-1, keepdims=True)
+    
+    # Set the k_hat for zero wavevectors explicitly to zero (or some other appropriate value)
+    e_hat = np.zeros_like(k)
+    non_zero_indices = e_norm.squeeze() > 0  # Indices where the norm is non-zero
+    e_hat[non_zero_indices] = e[non_zero_indices] / e_norm[non_zero_indices]
+
+    # Ensure that e_hat is not a zero vector (which can happen if k is parallel to z)
+    # In such a case, we can choose e_hat to be any vector orthogonal to k
+    for i, e in enumerate(e_hat):
+        if np.allclose(e, np.zeros_like(e)):
+            # Choose a new e_hat that is not parallel to k
+            if np.allclose(k_hat[i], np.array([1, 0, 0])) or np.allclose(k_hat[i], np.array([0, 0, 1])):
+                e_hat[i] = np.array([0, 1, 0])
+            else:
+                e_hat[i] = np.array([1, 0, 0])
+
+    # Calculate helical components    
+    factor = 1/np.sqrt(2.0)
+    e_cross_k = np.cross(e_hat,k)
+    e_cross_k_norm = np.linalg.norm(e_cross_k,axis=-1,keepdims=True)
+    k_cross_e_cross_k = np.cross(k, e_cross_k)
+    k_cross_e_cross_k_norm = np.linalg.norm(k_cross_e_cross_k,axis=-1,keepdims=True)
+    
+    h_plus =  factor * e_cross_k / e_cross_k_norm  + \
+                 factor * 1j * k_cross_e_cross_k / k_cross_e_cross_k_norm
+                 
+    h_minus = factor * e_cross_k / e_cross_k_norm - \
+                 factor * 1j * k_cross_e_cross_k / k_cross_e_cross_k_norm
+
+    # test orthogonality 
+    #print(np.abs(np.sum(h_plus * h_minus, axis=-1)))
+    #print(np.sum(np.abs(h_minus * h_plus), axis=-1))
+
+    # Project velocity field onto helical components
+    u_plus = np.sum(vector_field_FFT * h_plus, axis=-1)
+    u_minus = np.sum(vector_field_FFT * h_minus, axis=-1)
+
+    # remove k = 0 mode   
+    u_plus[np.isnan(u_plus)] = 0
+    u_minus[np.isnan(u_minus)] = 0
+
+    return u_plus, u_minus
+
+def create_helical_field(N, k_index, A_plus=1, A_minus=0):
+    """
+    Creates a vector field with known helical components.
+
+    Parameters:
+    N (int): Size of the grid in each dimension.
+    k_index (tuple): The index of the wavevector to be used.
+
+    Returns:
+    np.ndarray: The generated vector field.
+    """
+    # Create an empty field in Fourier space
+    field_fft = np.zeros((N, N, N, 3), dtype=complex)
+
+    # Generate the wavevector
+    L = 1
+    kx, ky, kz = np.meshgrid(np.fft.fftfreq(N, d=L/N), 
+                             np.fft.fftfreq(N, d=L/N), 
+                             np.fft.fftfreq(N, d=L/N), indexing='ij')
+    k = np.stack((kx, ky, kz), axis=-1)
+
+    # Calculate h_plus and h_minus for the selected wavevector
+    k_vector = k[k_index]
+    k_norm = np.linalg.norm(k_vector,axis=-1,keepdims=True)
+    k_hat = k_vector / k_norm
+
+    z = np.array([0, 0, 1])
+    e = np.cross(z, k_hat)
+    e_norm = np.linalg.norm(e,axis=-1)
+    e_hat = e / e_norm
+
+    factor = 1/np.sqrt(2.0)
+    e_cross_k = np.cross(e_hat,k_vector)
+    e_cross_k_norm = np.linalg.norm(e_cross_k,axis=-1,keepdims=True)
+    k_cross_e_cross_k = np.cross(k_vector, e_cross_k)
+    k_cross_e_cross_k_norm = np.linalg.norm(k_cross_e_cross_k,axis=-1,keepdims=True)
+    
+    h_plus =  factor * e_cross_k / e_cross_k_norm + \
+                 factor * 1j * k_cross_e_cross_k / k_cross_e_cross_k_norm
+                 
+    h_minus = factor * e_cross_k / e_cross_k_norm - \
+                 factor * 1j * k_cross_e_cross_k / k_cross_e_cross_k_norm
+
+    # Assign coefficients in Fourier space
+    field_fft[k_index] = A_plus * h_plus + A_minus * h_minus
+
+    # Perform inverse FFT to get the field in physical space
+    field = fft.ifftn(field_fft, axes=(0, 1, 2),norm="forward").real
+
+    return field
 
 def generate_powerlaw_field(size:  int,
                             alpha: float = 5./3.) -> np.ndarray:
