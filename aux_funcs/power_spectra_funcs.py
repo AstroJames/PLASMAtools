@@ -43,10 +43,10 @@ def compute_power_spectrum_3D(volume: np.ndarray) -> np.ndarray:
     
     return power_spectrum_3D
 
-def radial_integrate(data: np.ndarray, 
-                     bins: int = None) -> tuple:
+def spherical_integrate(data: np.ndarray, 
+                        bins: int = None) -> tuple:
     """
-    This radial integrate function takes the 3D power spectrum and integrates
+    The spherical integrate function takes the 3D power spectrum and integrates
     over spherical shells of constant k. The result is a 1D power spectrum.
     
     It has been tested to reproduce the 1D power spectrum of an input 3D Gaussian
@@ -93,6 +93,67 @@ def radial_integrate(data: np.ndarray,
     k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
 
     return k_modes, radial_sum
+
+def cylindrical_integrate(data: np.ndarray, 
+                          bins_perp: int = None,
+                          bins_para:  int = None) -> tuple:
+    """
+    The cylindrical integrate function takes the 3D power spectrum and integrates
+    over cylindrical shells of constant k in a plane, and then a 1D spectrum along
+    the the remaining dimension. The result is a 2D power spectrum of k_perp and k_par
+    modes.
+    
+    
+   Args:
+        data     : The 3D power spectrum
+        bins_perp: Number of bins for k_perpendicular
+        bins_para: Number of bins for k_parallel
+
+    Returns:
+        k_perp_modes    : k_perpendicular modes
+        k_para_modes    : k_parallel modes
+        cylindrical_sum : cylindrical integration of the 3D power spectrum
+                          note that k_perp is on axis 0, k_para is on axis 1
+    """
+    
+    z, y, x = np.indices(data.shape)
+    center  = np.array([(i - 1) / 2.0 for i in data.shape])
+    k_perp  = np.sqrt((x - center[0])**2 + (y - center[1])**2)  # Cylindrical radius
+    k_para  = np.abs(z - center[2])                             # Distance from the plane
+
+    N = data.shape[0]
+    if not bins_perp:
+        bins_perp = N // 2
+    if not bins_para:
+        bins_para = N // 2
+
+    # initailize cylindrical sum
+    cylindrical_sum = np.zeros((bins_perp, bins_para))
+
+    # define bin edges (note starting at 0.5 to avoid binning the zero mode)
+    bin_edges_perp = np.linspace(0, bins_perp, bins_perp+1)
+    bin_edges_para = np.linspace(0, bins_para, bins_para+1)
+
+    # Vectorized bin assignment
+    bin_indices_perp = np.digitize(k_perp, bin_edges_perp) - 1
+    bin_indices_para = np.digitize(k_para, bin_edges_para) - 1
+
+    # Create 2D linear indices
+    linear_indices = bin_indices_perp + bin_indices_para * bins_perp
+
+    # Use np.bincount for efficient summation
+    cylindrical_sum = np.bincount(linear_indices.ravel(), 
+                                  weights=data.ravel(), 
+                                  minlength=bins_perp * bins_para)
+    
+    # Ensure that the length matches the expected size
+    cylindrical_sum = cylindrical_sum[:bins_perp * bins_para]
+    cylindrical_sum = cylindrical_sum.reshape((bins_perp, bins_para))
+    k_perp_modes = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
+    k_para_modes = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
+
+    return k_perp_modes, k_para_modes, cylindrical_sum
+
 
 def helical_decomposition(vector_field):
     """
@@ -233,7 +294,7 @@ def create_helical_field(N, k_index, A_plus=1, A_minus=0):
 
     return field
 
-def generate_powerlaw_field(size:  int,
+def generate_isotropic_powerlaw_field(size:  int,
                             alpha: float = 5./3.) -> np.ndarray:
     """
     This computes a random field with a power-law power spectrum. The power spectrum
@@ -269,3 +330,46 @@ def generate_powerlaw_field(size:  int,
     adjusted_field = 10*random_field * amplitude
 
     return np.fft.ifftn(adjusted_field).real
+
+def generate_anisotropic_powerlaw_field(size:  int,
+                                        alpha: float = 5./3.,
+                                        beta:  float = 5./3.) -> np.ndarray:
+    """
+    This computes a random field with a power-law power spectrum. The power spectrum
+    is P(k) = k_perp^-alpha k_parallel^-beta. The field is generated in Fourier space, 
+    and then inverse transformed to real space.
+    
+    Author: James Beattie
+
+    Args:
+        size (int): the linear dimension of the 3D field
+        alpha (float): the negative 1D power-law exponent used in Fourier space for the 
+                        perpendicular component. Defaults to 5/3.
+                        Note that I make the transformations between 3D Fourier transform 
+                        exponent and 1D power spectrum exponent in the code.
+        beta (float): the negative 1D power-law exponent used in Fourier space for the 
+                        parallel component. Defaults to 5/3.
+
+    Returns:
+        ifft field (np.ndarray): the inverse fft of the random field with a power-law power spectrum
+    """
+    # Create a grid of frequencies
+    kx = np.fft.fftfreq(size)
+    ky = np.fft.fftfreq(size)
+    kz = np.fft.fftfreq(size)
+    
+    kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
+    
+    # Calculate the magnitude of k for each frequency component
+    k_perp              = np.sqrt(kx**2 + ky**2)
+    k_par               = np.abs(kz)
+    k_perp[k_perp==0]   = 1   # Avoid division by zero
+    k_par[k_par==0]     = 1    # Avoid division by zero
+    
+    # Create a 3D grid of random complex numbers for phases
+    random_field = np.random.randn(size, size, size) + 1j * np.random.randn(size, size, size)
+    
+    # Adjust the amplitude of each frequency component to follow k^-5/3 (-11/3 in 3D)
+    amplitude = k_perp**(-(alpha)/2.0)*k_par**(-(beta)/2.0)
+
+    return np.fft.ifftn(10*random_field * amplitude).real

@@ -12,6 +12,7 @@
 ## IMPORTS
 ## ###############################################################
 
+#import scipy.fft as fft
 import scipy.fft as fft
 import numpy as np
 
@@ -26,24 +27,28 @@ X,Y,Z = 0,1,2
 F = -1 # shift forwards
 B = +1 # shift backwards
 
-def helmholtz_decomposition(F: np.ndarray,
-                            x: np.ndarray,
+
+def helmholtz_decomposition(vector_field: np.ndarray,
                             n_workers: int = 1):
     """
     Author: James Beattie (assumes periodic boundary conditions)
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
-    shape = F.shape[:-1]
-    Fhat = fft.fftn(F, axes=(0, 1, 2),norm = 'forward',workers=n_workers)
+    
+    shape = vector_field.shape[:-1]
+    x     = np.linspace(-0.5,0.5,vector_field.shape[0]) # assuming a domian of [-L/2, L/2]
+    
+    # Fourier transform to Fourier space    
+    Fhat = fft.fftn(vector_field, axes=(0, 1, 2),norm = 'forward',workers=n_workers)
     
     Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
     Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
     norm       = np.zeros(shape, dtype=np.float64)
     
     # Compute wave numbers
-    kx = fft.fftfreq(shape[X])* 2*np.pi * shape[X] / (x[-1] - x[0])
-    ky = fft.fftfreq(shape[Y])* 2*np.pi * shape[Y] / (x[-1] - x[0])
-    kz = fft.fftfreq(shape[Z])* 2*np.pi * shape[Z] / (x[-1] - x[0])
+    kx = np.fft.fftfreq(shape[X])* 2*np.pi * shape[X] / (x[-1] - x[0])
+    ky = np.fft.fftfreq(shape[Y])* 2*np.pi * shape[Y] / (x[-1] - x[0])
+    kz = np.fft.fftfreq(shape[Z])* 2*np.pi * shape[Z] / (x[-1] - x[0])
     kX, kY, kZ = np.meshgrid(kx, ky, kz, indexing='ij')
     
     # Avoid division by zero
@@ -62,14 +67,14 @@ def helmholtz_decomposition(F: np.ndarray,
     F_solen = fft.ifftn(Fhat_solen, axes=(X,Y,Z),workers=n_workers,norm = 'forward').real
     
     # Remove numerical noise
-    threshold = 1e-16
-    F_solen[np.abs(F_solen) < threshold] = 0
-    F_irrot[np.abs(F_irrot) < threshold] = 0
+    # threshold = 1e-16
+    # F_solen[np.abs(F_solen) < threshold] = 0
+    # F_irrot[np.abs(F_irrot) < threshold] = 0
     
     return F_irrot, F_solen
 
 
-def vector_curl(field):
+def vector_curl(vector_field):
     """
     Compute the vector curl (assumes periodic boundary conditions) 
     using second order finite differences
@@ -78,28 +83,28 @@ def vector_curl(field):
     """
     
     # differentials
-    two_dx = 2./field[0].shape[0]
-    two_dy = 2./field[1].shape[0]
-    two_dz = 2./field[2].shape[0]
+    two_dx = 2./vector_field[X].shape[0]
+    two_dy = 2./vector_field[Y].shape[0]
+    two_dz = 2./vector_field[Z].shape[0]
     
     # x component of curl
-    dFz_dy = (np.roll(field[Z],F,axis=Y) - np.roll(field[Z],B,axis=Y))/two_dy
-    dFy_dz = (np.roll(field[Y],F,axis=Z) - np.roll(field[Y],B,axis=Z))/two_dz
+    dFz_dy = (np.roll(vector_field[Z],F,axis=Y) - np.roll(vector_field[Z],B,axis=Y))/two_dy
+    dFy_dz = (np.roll(vector_field[Y],F,axis=Z) - np.roll(vector_field[Y],B,axis=Z))/two_dz
     
     # y component of curl
-    dFx_dz = (np.roll(field[X],F,axis=Z) - np.roll(field[X],B,axis=Z))/two_dz
-    dFz_dx = (np.roll(field[Z],F,axis=X) - np.roll(field[Z],B,axis=X))/two_dx
+    dFx_dz = (np.roll(vector_field[X],F,axis=Z) - np.roll(vector_field[X],B,axis=Z))/two_dz
+    dFz_dx = (np.roll(vector_field[Z],F,axis=X) - np.roll(vector_field[Z],B,axis=X))/two_dx
     
     # z component of curl
-    dFy_dx = (np.roll(field[Y],F,axis=X) - np.roll(field[Y],B,axis=X))/two_dx
-    dFx_dy = (np.roll(field[X],F,axis=Y) - np.roll(field[X],B,axis=Y))/two_dy
+    dFy_dx = (np.roll(vector_field[Y],F,axis=X) - np.roll(vector_field[Y],B,axis=X))/two_dx
+    dFx_dy = (np.roll(vector_field[X],F,axis=Y) - np.roll(vector_field[X],B,axis=Y))/two_dy
     
     return np.array([dFz_dy - dFy_dz,
                      dFx_dz - dFz_dx,
                      dFy_dx - dFx_dy])
     
     
-def scalar_laplacian(field):
+def scalar_laplacian(scalar_field):
     """
     Compute the scalar laplacian (assumes periodic boundary conditions)
     using second order finite differences
@@ -108,13 +113,13 @@ def scalar_laplacian(field):
     """
         
     # differentials
-    dx = 1./field[0].shape[0]
-    dy = 1./field[1].shape[0]
-    dz = 1./field[2].shape[0]
+    dx = 1./scalar_field[X].shape[0]
+    dy = 1./scalar_field[Y].shape[0]
+    dz = 1./scalar_field[Z].shape[0]
     
-    d2Fx_dx2 = (np.roll(field[X],F,axis=X) - 2*field[X] + np.roll(field[X],B,axis=X))/dx**2
-    d2Fy_dy2 = (np.roll(field[Y],F,axis=Y) - 2*field[Y] + np.roll(field[Y],B,axis=Y))/dy**2
-    d2Fz_dz2 = (np.roll(field[Z],F,axis=Z) - 2*field[Z] + np.roll(field[Z],B,axis=Z))/dz**2
+    d2Fx_dx2 = (np.roll(scalar_field,F,axis=X) - 2*scalar_field + np.roll(scalar_field,B,axis=X))/dx**2
+    d2Fy_dy2 = (np.roll(scalar_field,F,axis=Y) - 2*scalar_field + np.roll(scalar_field,B,axis=Y))/dy**2
+    d2Fz_dz2 = (np.roll(scalar_field,F,axis=Z) - 2*scalar_field + np.roll(scalar_field,B,axis=Z))/dz**2
     
     return d2Fx_dx2 + d2Fy_dy2 + d2Fz_dz2
         
