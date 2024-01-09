@@ -13,6 +13,7 @@
 ## ###############################################################
 
 #import scipy.fft as fft
+from ftplib import B_CRLF
 import scipy.fft as fft
 import numpy as np
 
@@ -27,10 +28,86 @@ X,Y,Z = 0,1,2
 F = -1 # shift forwards
 B = +1 # shift backwards
 
+def gradient_tensor(vector_field):
+    """
+    Compute the gradient tensor of a vector field using 
+    second order differenecs.
+    
+    Author: James Beattie
+    """
+    
+    # differentials
+    dx = 1./vector_field[X].shape[0]
+    dy = 1./vector_field[Y].shape[0]
+    dz = 1./vector_field[Z].shape[0]
+    
+    # x component of gradient tensor
+    dFx_dx = (np.roll(vector_field[X],F,axis=X) - np.roll(vector_field[X],B,axis=X))/dx
+    dFy_dx = (np.roll(vector_field[Y],F,axis=X) - np.roll(vector_field[Y],B,axis=X))/dx
+    dFz_dx = (np.roll(vector_field[Z],F,axis=X) - np.roll(vector_field[Z],B,axis=X))/dx
+    
+    # y component of gradient tensor
+    dFx_dy = (np.roll(vector_field[X],F,axis=Y) - np.roll(vector_field[X],B,axis=Y))/dy
+    dFy_dy = (np.roll(vector_field[Y],F,axis=Y) - np.roll(vector_field[Y],B,axis=Y))/dy
+    dFz_dy = (np.roll(vector_field[Z],F,axis=Y) - np.roll(vector_field[Z],B,axis=Y))/dy
+    
+    # z component of gradient tensor
+    dFx_dz = (np.roll(vector_field[X],F,axis=Z) - np.roll(vector_field[X],B,axis=Z))/dz
+    dFy_dz = (np.roll(vector_field[Y],F,axis=Z) - np.roll(vector_field[Y],B,axis=Z))/dz
+    dFz_dz = (np.roll(vector_field[Z],F,axis=Z) - np.roll(vector_field[Z],B,axis=Z))/dz
+    
+    return np.array([[dFx_dx,dFx_dy,dFx_dz],
+                     [dFy_dx,dFy_dy,dFy_dz],
+                     [dFz_dx,dFz_dy,dFz_dz]])
+
+
+def orthongonal_tensor_decomposition(tensor_field):
+    """
+    Compute the symmetric, anti-symmetric and bulk components of a tensor field.
+    
+    Author: James Beattie
+    """
+    
+    # bulk component
+    tensor_trace = (1./3.) * np.trace(tensor_field,axis1=0,axis2=1)
+    
+    # symmetric component
+    tensor_sym = 0.5 * (tensor_field + np.transpose(tensor_field,(1,0,2,3))) -  np.einsum('ij,kl->ijkl',tensor_trace,np.identity(3))
+    
+    # anti-symmetric component
+    tensor_anti = 0.5 * (tensor_field - np.transpose(tensor_field,(1,0,2,3)))
+    
+    return tensor_sym, tensor_anti, tensor_trace
+
+def stretch_tensor(tensor_field):
+    """
+    Compute the stretch tensor of a tensor field.
+    
+    Author: James Beattie
+    """
+    
+    # symmetric component
+    tensor_sym, _, _ = orthongonal_tensor_decomposition(tensor_field)
+    
+    # eigenvalues and eigenvectors
+    tensor_eigvals, tensor_eigvecs = np.linalg.eig(tensor_sym)
+    
+    # sort eigenvalues and eigenvectors
+    idx = tensor_eigvals.argsort()[::-1]   
+    tensor_eigvals = tensor_eigvals[idx]
+    tensor_eigvecs = tensor_eigvecs[:,idx]
+    
+    # stretch tensor
+    tensor_stretch = np.einsum('ij,ijkl->ijkl',tensor_eigvals,np.einsum('ij,kl->ijkl',tensor_eigvecs,np.identity(3)))
+    
+    return tensor_stretch
+
 
 def helmholtz_decomposition(vector_field: np.ndarray,
                             n_workers: int = 1):
     """
+    Compute the irrotational and solenoidal components of a vector field.
+    
     Author: James Beattie (assumes periodic boundary conditions)
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
@@ -210,7 +287,7 @@ def compute_TNB_basis(vector_field):
     """
     Compute the Fressnet frame of a vector field (TNB basis).
     
-    Author: Neco Kriel
+    Author: Neco Kriel + James Beattie
     """
     ## format: (component, x, y, z)
     vector_field = np.array(vector_field)
@@ -238,5 +315,75 @@ def compute_TNB_basis(vector_field):
     b_basis = vector_cross_product(t_basis, n_basis)
     return t_basis, n_basis, b_basis, kappa
 
+
+def TNB_coordinate_transformation(vector_field):
+    """
+    Transform a vector field into the TNB coordinate system.
+    
+    Author: James Beattie
+    """
+    
+    # compute the TNB basis
+    t_basis, n_basis, b_basis, kappa = compute_TNB_basis(vector_field)
+    
+    # transform vector field to TNB basis
+    vector_field_TNB = np.array([
+        vector_dot_product(vector_field, t_basis),
+        vector_dot_product(vector_field, n_basis),
+        vector_dot_product(vector_field, b_basis)
+    ])
+    
+    return vector_field_TNB
+
+
+def TNB_jacobian(vector_field):
+    """
+    Compute the Jacobian of a vector field in the TNB coordinate system.
+    
+    Note: the Jacobian is a 2D tensor which is only appropriate for 3D fields where
+    there is no divergence component. This reduces the degress of freedom from 3 to 2.
+    
+    Author: James Beattie
+    """
+    
+    # compute the vector field in the TNB basis
+    vector_field_TNB = TNB_coordinate_transformation(vector_field)
+    
+    # indexes for the TNB basis
+    n_basis = 1
+    b_basis = 2
+    
+    # differentials
+    two_dn = 2./vector_field_TNB[n_basis].shape[0]
+    two_db = 2./vector_field_TNB[b_basis].shape[0]
+    
+    # now compute a 2D jacobian tensor for each (x, y, z) point
+    # dn_basis
+    dFn_basis_dn_basis = (np.roll(vector_field_TNB[n_basis],F,axis=n_basis) - np.roll(vector_field_TNB[n_basis],B,axis=n_basis))/two_dn
+    dFb_basis_dn_basis = (np.roll(vector_field_TNB[b_basis],F,axis=n_basis) - np.roll(vector_field_TNB[b_basis],B,axis=n_basis))/two_dn
+    
+    # db_basis
+    dFn_basis_db_basis = (np.roll(vector_field_TNB[n_basis],F,axis=b_basis) - np.roll(vector_field_TNB[n_basis],B,axis=b_basis))/two_db
+    dFb_basis_db_basis = (np.roll(vector_field_TNB[b_basis],F,axis=b_basis) - np.roll(vector_field_TNB[b_basis],B,axis=b_basis))/two_db
+    
+    jacobian = np.array([[dFn_basis_dn_basis,dFn_basis_db_basis],
+                         [dFb_basis_dn_basis,dFb_basis_db_basis]])
+    
+    
+    return jacobian
+
+
+def TNB_jacobian_eigen_values(tensor_field):
+    """
+    Compute the eigen values of the Jacobian of a vector field in the TNB coordinate system.
+    
+
+    Args:
+        tensor_field (_type_):
+    """
+    
+    np.trace(tensor_field,axis1=1,axis2=3)
+    np.linalg.det(tensor_field,)
+    
 
 ## END OF LIBRARY
