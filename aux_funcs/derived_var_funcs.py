@@ -4,7 +4,7 @@
     Date: 09/07/2017
     Description: Functions for calculating derived variables in the read_flash classes
     
-    Collaborators: Neco Kriel (all the curvature functions).
+    Collaborators: Neco Kriel (curvature function).
 
 """
 
@@ -13,7 +13,6 @@
 ## ###############################################################
 
 #import scipy.fft as fft
-from ftplib import B_CRLF
 import scipy.fft as fft
 import numpy as np
 
@@ -27,6 +26,78 @@ X,Y,Z = 0,1,2
 # shifts for derivatives
 F = -1 # shift forwards
 B = +1 # shift backwards
+
+def vector_potential(vector_field,
+                     debug = False):
+    """
+    Create the underlying vector potential, a, of a vector field. For a magnetic field,
+    assuming a Coulomb Gauage (div(a) = 0), this is the vector potential that satisfies the equation:
+    
+    \nabla x b = \nabla x \nabla x a = \nabla (\nabla \cdot a) -\nabla^2 a,
+
+    \nabla \cdot a = 0,
+    
+    \nabla^2 a = -\nabla x b,
+    
+    where b is the magnetic field. In Fourier space:
+    
+    - k^2 \hat{a} = -i k \times \hat{b},
+    
+    \hat{a} = i \frac{k \times \hat{b}}{k^2},
+    
+    where k is the wavevector and \hat{a} is the Fourier transform of the vector potential, 
+    \hat{b} is the Fourier transform of the magnetic field, and i is the imaginary i = \sqrt{-1}.
+    
+    Hence a can be found by taking the inverse Fourier transform of \hat{a}.
+    
+    
+    Author: James Beattie
+    
+    """
+    
+    # Take FFT of vector field
+    vector_field_FFT = fft.fftn(vector_field,
+                                norm='forward',
+                                axes=(1,2,3))
+
+    # Assuming a cubic domain    
+    N = vector_field.shape[1]  
+    # The physical size of the domain
+    L = 1.0
+    
+    # Space holder for the reconstructed magnetic field
+    b_recon = 0.0
+    
+    # wave vectors
+    kx = 2 * np.pi * fft.fftfreq(N, d=L/N) / L
+    ky = 2 * np.pi * fft.fftfreq(N, d=L/N) / L
+    kz = 2 * np.pi * fft.fftfreq(N, d=L/N) / L
+    
+    kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
+    k = np.array([kx,ky,kz]) # This will be of shape (3, N, N, N)
+
+    # Normalize k to get the unit wavevector
+    k_norm = np.tile(np.linalg.norm(k, axis=0, keepdims=True), (3, 1, 1, 1)) # This will be of shape (1, N, N, N)
+
+    # Replace zeros in k_norm with np.inf to avoid division by zero
+    k_norm[k_norm == 0] = np.inf
+    
+    # Take the cross product of k and the vector field
+    a_hat = 1j * vector_cross_product(k, vector_field_FFT) / k_norm**2
+    
+    # Take the inverse FFT to get the vector potential
+    a = fft.ifftn(a_hat, 
+                axes=(1, 2, 3),
+                norm="forward").real
+    
+    # Take the curl of the vector potential to get the reconstructed magnetic field
+    # for debuging
+    if debug:
+        # have to at least a fourth order derivative here 
+        # to get a good reconstruction
+        b_recon = vector_curl(a,order=4)  
+    
+    return a, b_recon
 
 def gradient_tensor(vector_field):
     """
@@ -123,9 +194,9 @@ def helmholtz_decomposition(vector_field: np.ndarray,
     norm       = np.zeros(shape, dtype=np.float64)
     
     # Compute wave numbers
-    kx = np.fft.fftfreq(shape[X])* 2*np.pi * shape[X] / (x[-1] - x[0])
-    ky = np.fft.fftfreq(shape[Y])* 2*np.pi * shape[Y] / (x[-1] - x[0])
-    kz = np.fft.fftfreq(shape[Z])* 2*np.pi * shape[Z] / (x[-1] - x[0])
+    kx = 2*np.pi * np.fft.fftfreq(shape[X]) * shape[X] / (x[-1] - x[0])
+    ky = 2*np.pi * np.fft.fftfreq(shape[Y]) * shape[Y] / (x[-1] - x[0])
+    kz = 2*np.pi * np.fft.fftfreq(shape[Z]) * shape[Z] / (x[-1] - x[0])
     kX, kY, kZ = np.meshgrid(kx, ky, kz, indexing='ij')
     
     # Avoid division by zero
@@ -151,35 +222,56 @@ def helmholtz_decomposition(vector_field: np.ndarray,
     return F_irrot, F_solen
 
 
-def vector_curl(vector_field):
+def vector_curl(vector_field,
+                order = 2):
     """
     Compute the vector curl (assumes periodic boundary conditions) 
-    using second order finite differences
+    using either second or fourth order finite differences
     
     Author: James Beattie
     """
     
-    # differentials
-    two_dx = 2./vector_field[X].shape[0]
-    two_dy = 2./vector_field[Y].shape[0]
-    two_dz = 2./vector_field[Z].shape[0]
-    
+    if order == 2:
+        grad_fun = gradient_order2
+    elif order == 4:
+        grad_fun = gradient_order4
+        
     # x component of curl
-    dFz_dy = (np.roll(vector_field[Z],F,axis=Y) - np.roll(vector_field[Z],B,axis=Y))/two_dy
-    dFy_dz = (np.roll(vector_field[Y],F,axis=Z) - np.roll(vector_field[Y],B,axis=Z))/two_dz
+    dFz_dy = grad_fun(vector_field[Z],gradient_dir=Y)
+    dFy_dz = grad_fun(vector_field[Y],gradient_dir=Z)
     
     # y component of curl
-    dFx_dz = (np.roll(vector_field[X],F,axis=Z) - np.roll(vector_field[X],B,axis=Z))/two_dz
-    dFz_dx = (np.roll(vector_field[Z],F,axis=X) - np.roll(vector_field[Z],B,axis=X))/two_dx
+    dFx_dz = grad_fun(vector_field[X],gradient_dir=Z)
+    dFz_dx = grad_fun(vector_field[Z],gradient_dir=X)
     
     # z component of curl
-    dFy_dx = (np.roll(vector_field[Y],F,axis=X) - np.roll(vector_field[Y],B,axis=X))/two_dx
-    dFx_dy = (np.roll(vector_field[X],F,axis=Y) - np.roll(vector_field[X],B,axis=Y))/two_dy
-    
+    dFy_dx = grad_fun(vector_field[Y],gradient_dir=X)
+    dFx_dy = grad_fun(vector_field[X],gradient_dir=Y)
+        
     return np.array([dFz_dy - dFy_dz,
                      dFx_dz - dFz_dx,
                      dFy_dx - dFx_dy])
     
+
+def vector_divergence(vector_field,
+                        order = 2):
+    """
+    Compute the vector divergence (assumes periodic boundary conditions)
+    using either second or fourth order finite differences
+    
+    """
+    
+    if order == 2:
+        grad_fun = gradient_order2
+    elif order == 4:
+        grad_fun = gradient_order4
+    
+    # divergence
+    dFx_dx = grad_fun(vector_field[X],gradient_dir=X)
+    dFy_dy = grad_fun(vector_field[Y],gradient_dir=Y)
+    dFz_dz = grad_fun(vector_field[Z],gradient_dir=Z)
+    
+    return dFx_dx + dFy_dy + dFz_dz
     
 def scalar_laplacian(scalar_field):
     """
@@ -212,7 +304,7 @@ def vector_cross_product(vector1, vector2):
     
     vector3 = np.array([
     vector1[Y] * vector2[Z] - vector1[Z] * vector2[Y],
-    vector1[Z] * vector2[X] - vector1[X] * vector2[Y],
+    vector1[Z] * vector2[X] - vector1[X] * vector2[Z],
     vector1[X] * vector2[Y] - vector1[Y] * vector2[X]
     ])
     return vector3    
@@ -243,19 +335,37 @@ def field_magnitude(vector_field):
     return np.sqrt(np.sum(vector_field**2, axis=0))
 
 
-def gradient_2ocd(field, cell_width, gradient_dir):
+def gradient_order2(scalar_field, gradient_dir):
     """
-    Compute the gradient of a field in one direction.
+    Compute the gradient of a scalar field in one direction
+    using a two point stencil (second order method).
     
-    Auxillary functions for computeTNBBasis
-    
-    Author: Neco Kriel
+    Author: Neco Kriel & James Beattie
     """
-    F = -1 # shift forwards
-    B = +1 # shift backwards
+    
+    # 2dr
+    two_dr = 2./scalar_field.shape[gradient_dir]
+    
     return (
-        np.roll(field, F, axis=gradient_dir) - np.roll(field, B, axis=gradient_dir)
-    ) / (2*cell_width)
+        np.roll(scalar_field, F, axis=gradient_dir) - np.roll(scalar_field, B, axis=gradient_dir)/ two_dr )
+    
+def gradient_order4(scalar_field, gradient_dir):
+    """
+    Compute the gradient of a scalar field  in one direction
+    using a five point stencil (fourth order method).
+    
+    Author: James Beattie
+    
+    """
+    
+    # 12dr
+    twelve_dr = 12./scalar_field.shape[gradient_dir]
+    
+    # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
+    return ( - np.roll(scalar_field,2*F,axis=gradient_dir) +  \
+             8*np.roll(scalar_field,F,axis=gradient_dir) - \
+             8*np.roll(scalar_field,B,axis=gradient_dir) + \
+               np.roll(scalar_field,2*B,axis=gradient_dir)) / twelve_dr
 
 
 def field_RMS(scalar_field):
@@ -271,14 +381,13 @@ def field_gradient(scalar_field):
     """
     Compute the gradient of a scalar field.
     
-    Author: Neco Kriel
+    Author: Neco Kriel & James Beattie
     """
     ## format: (x, y, z)
     scalar_field = np.array(scalar_field)
-    cell_width = 1 / scalar_field.shape[0]
     field_gradient = [
-        gradient_2ocd(scalar_field, cell_width, gradient_dir)
-        for gradient_dir in [0, 1, 2]
+        gradient_order2(scalar_field, gradient_dir)
+        for gradient_dir in [X, Y, Z]
     ]
     return np.array(field_gradient)
 
@@ -324,7 +433,7 @@ def TNB_coordinate_transformation(vector_field):
     """
     
     # compute the TNB basis
-    t_basis, n_basis, b_basis, kappa = compute_TNB_basis(vector_field)
+    t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
     
     # transform vector field to TNB basis
     vector_field_TNB = np.array([
@@ -373,17 +482,67 @@ def TNB_jacobian(vector_field):
     return jacobian
 
 
-def TNB_jacobian_eigen_values(tensor_field):
+def TNB_jacobian_stability_analysis(vector_field,
+                                    traceless = True):
     """
-    Compute the eigen values of the Jacobian of a vector field in the TNB coordinate system.
+    Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the TNB coordinate system.
     
-
-    Args:
-        tensor_field (_type_):
     """
     
-    np.trace(tensor_field,axis1=1,axis2=3)
-    np.linalg.det(tensor_field,)
+    def theta_eig(J_thresh,J_3):
+        """
+        Compute the angle between the eigenvectors of the Jacobian.
+        """
+        
+        # Two conditions for O and X points
+        condition = np.abs(J_3) < J_thresh
+        ratio = np.where(condition, J_3 / J_thresh, J_thresh / J_3)
+        
+        return np.arctan( np.sqrt(ratio**2-1) )
     
-
+    # Compute jacobian of B field
+    jacobian = field_gradient(vector_field)
+    
+    # Make jacobian traceless (numerical errors will result in some trace, which is
+    # equivalent to div(B) modes)
+    if traceless:   
+        jacobian = jacobian - (1/3) * np.einsum("xyz, ...i",
+                                                np.einsum("iixyz",
+                                                        jacobian),
+                                                np.eye(3))
+    
+    # Compute TNB basis
+    t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
+    X   = np.array([b_basis,n_basis,t_basis])
+    X_T = np.einsum("ijxyz->jixyz",X)
+    
+    # Put jacobian into the TNB basis
+    trans_jacobian = np.einsum('abxyz,bcxyz,dcxyz->adxyz', 
+                               X, 
+                               jacobian, 
+                               X_T)
+    
+    # Construct M, the 2D jacobian of the B_perp field
+    M_11 = trans_jacobian[0,0,...]
+    M_12 = trans_jacobian[0,1,...]
+    M_21 = trans_jacobian[1,0,...]
+    M_22 = trans_jacobian[1,1,...]
+    M = np.array([[M_11, M_12],
+                  [M_21, M_22]])
+    
+    # Compute trace and determinant of M
+    trace_M = np.einsum("iixyz",M)
+    det_M   = M_11 * M_22 - M_12 * M_21
+    
+    # Characteristic equation
+    D = 4 * det_M - trace_M**2
+    
+    J_3         = M_21 - M_12
+    J_thresh    = np.sqrt( (M_11 - M_22)**2 + (M_12 + M_21)**2 )
+    
+    # Eigen values of M from characteristic equation
+    eig_1 = 0.5 * ( trace_M + np.sqrt( - (D + 0j)))
+    eig_2 = 0.5 * ( trace_M - np.sqrt( - (D + 0j)))
+    
+    return trace_M, D, eig_1, eig_2, theta_eig(J_thresh,J_3)
 ## END OF LIBRARY
