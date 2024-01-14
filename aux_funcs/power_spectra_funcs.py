@@ -217,10 +217,10 @@ def helical_decomposition(vector_field):
                 e_hat[i] = np.array([1, 0, 0])
 
     # Calculate helical components    
-    factor = 1/np.sqrt(2.0)
-    e_cross_k = np.cross(e_hat,k)
-    e_cross_k_norm = np.linalg.norm(e_cross_k,axis=-1,keepdims=True)
-    k_cross_e_cross_k = np.cross(k, e_cross_k)
+    factor                 = 1/np.sqrt(2.0)
+    e_cross_k              = np.cross(e_hat,k)
+    e_cross_k_norm         = np.linalg.norm(e_cross_k,axis=-1,keepdims=True)
+    k_cross_e_cross_k      = np.cross(k, e_cross_k)
     k_cross_e_cross_k_norm = np.linalg.norm(k_cross_e_cross_k,axis=-1,keepdims=True)
     
     h_plus =  factor * e_cross_k / e_cross_k_norm  + \
