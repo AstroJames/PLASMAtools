@@ -15,6 +15,8 @@
 #import scipy.fft as fft
 import scipy.fft as fft
 import numpy as np
+from multiprocessing import Pool, shared_memory
+import ctypes
 
 ## ###############################################################
 ## Derived Variable Functions
@@ -139,49 +141,110 @@ def gradient_tensor(vector_field,
                      [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]])
     
 
-def orthongonal_tensor_decomposition(tensor_field):
+def orthogonal_tensor_decomposition(tensor_field):
     """
     Compute the symmetric, anti-symmetric and bulk components of a tensor field.
     
     Author: James Beattie
     """
     
+    # transpose
+    tensor_transpose = np.einsum("ij... -> ji...",tensor_field)
+    
     # bulk component
-    tensor_trace = (1./3.) * np.trace(tensor_field,axis1=0,axis2=1)
+    tensor_trace = (1./3.) * np.einsum("ii...",tensor_field)
     
     # symmetric component
-    tensor_sym = 0.5 * (tensor_field + np.transpose(tensor_field,(1,0,2,3))) -  np.einsum('ij,kl->ijkl',tensor_trace,np.identity(3))
+    tensor_sym = 0.5 * (tensor_field + tensor_transpose) -  np.einsum('...,ij...->ij...',tensor_trace,np.identity(3))
     
     # anti-symmetric component
-    tensor_anti = 0.5 * (tensor_field - np.transpose(tensor_field,(1,0,2,3)))
+    tensor_anti = 0.5 * (tensor_field - tensor_transpose)
     
     return tensor_sym, tensor_anti, tensor_trace
 
 
-def stretch_tensor(vector_field,
-                   tensor_field):
+# Top-level function for computing eigenvalues
+def compute_eigenvalues(args):
+    index, shape, dtype, shm_name = args
+    existing_shm = shared_memory.SharedMemory(name=shm_name)
+    trans_tensor_sym_shared = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
+    tensor_at_point = trans_tensor_sym_shared[..., index[0], index[1], index[2]]
+    eigvals = np.linalg.eigvalsh(tensor_at_point)
+    existing_shm.close()
+    return index, eigvals
+
+
+def eigs_stretch_tensor(vector_field,
+                        tensor_field,
+                        n_processes = 4):
     """
     Compute the stretch tensor of a tensor field along a given
-    vector field (usually magnetic field).
+    vector field (usually the magnetic field).
+    
+    I am assuming the tensor field is a symmetric tensor field
+    to minimise the memory useage for the eigen value calculation.
+    
+    I am using a TNB basis for the local coordinate system of the vector
+    field, which includes the curvature of the underlying field lines.
+    
+    If vector_field is the magnetic field, and tensor field is the velocity
+    gradient tensor, this computes the local stretching tensor of the velocity, 
+    through the eigen values of the velocity gradients in the coordinate system
+    of the magnetic field. The eigen values are stored as a 3D array, ordered by
+    the size of the eigen values. The first is the largest, stretching eigen
+    value, followed by the null eigen value and then the compression eigen value.
+    smallest. 
     
     Author: James Beattie
     """
     
+    print(f"stretch_tensor: computing eigen values of local " + 
+          f"stretching tensor with {n_processes} processes")
+    
     # symmetric component
-    tensor_sym, _, _ = orthongonal_tensor_decomposition(tensor_field)
+    tensor_sym, _, _ = orthogonal_tensor_decomposition(tensor_field)
     
-    # eigenvalues and eigenvectors
-    tensor_eigvals, tensor_eigvecs = np.linalg.eig(tensor_sym)
+    # Compute TNB basis of vector field
+    t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
+    X   = np.array([t_basis,n_basis,b_basis])
+    X_T = np.einsum("ij... -> ji ...",X)
     
-    # sort eigenvalues and eigenvectors
-    idx = tensor_eigvals.argsort()[::-1]   
-    tensor_eigvals = tensor_eigvals[idx]
-    tensor_eigvecs = tensor_eigvecs[:,idx]
+    # Put stretching tensor into the TNB basis
+    trans_tensor_sym = np.einsum('ij..., jk..., kl... -> il...', 
+                                 X, 
+                                 tensor_sym, 
+                                 X_T)
     
-    # stretch tensor
-    tensor_stretch = np.einsum('ij,ijkl->ijkl',tensor_eigvals,np.einsum('ij,kl->ijkl',tensor_eigvecs,np.identity(3)))
+    # Compute eigenvalues of the stretching tensor
     
-    return tensor_stretch
+   # Create shared memory for trans_tensor_sym
+    shm = shared_memory.SharedMemory(create=True, size=trans_tensor_sym.nbytes)
+    trans_tensor_sym_shared = np.ndarray(trans_tensor_sym.shape, dtype=trans_tensor_sym.dtype, buffer=shm.buf)
+    np.copyto(trans_tensor_sym_shared, trans_tensor_sym)  # Copy data to shared memory
+
+    # Assuming trans_tensor_sym has shape (3, 3, N, N, N)
+    N = trans_tensor_sym.shape[2]
+    indices = [(i, j, k) for i in range(N) for j in range(N) for k in range(N)]
+    
+    # Initialize an array to store the eigenvalues
+    eigenvalues = np.zeros((3, N, N, N))
+
+    # Prepare arguments for multiprocessing, including shared memory details
+    args = [(index, trans_tensor_sym.shape, trans_tensor_sym.dtype, shm.name) for index in indices]
+
+    # Use multiprocessing to compute eigenvalues in parallel
+    with Pool(processes=n_processes) as pool:
+        results = pool.map(compute_eigenvalues, args)
+
+    # Store the results in the eigenvalues array
+    for index, eigvals in results:
+        eigenvalues[(slice(None),) + index] = eigvals
+
+    # Clean up shared memory
+    shm.close()
+    shm.unlink()
+    
+    return eigenvalues
 
 
 def A_iA_j_tensor(vector_field):
@@ -472,7 +535,7 @@ def TNB_jacobian(vector_field):
 
 
 def TNB_jacobian_stability_analysis(vector_field,
-                                    traceless = False):
+                                    traceless = True):
     """
     Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the TNB coordinate system.
     
