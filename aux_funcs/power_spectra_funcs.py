@@ -374,7 +374,11 @@ def generate_anisotropic_powerlaw_field(size:  int,
 
     return np.fft.ifftn(10*random_field * amplitude).real
 
-def extract_isotropic_shell_X(vector_field,Low,Up):
+def extract_isotropic_shell_X(vector_field: np.ndarray,
+                              k_minus_dk:   float,
+                              k_plus_dk:    float,
+                              filter:       str     = 'tophat',
+                              sigma:        float   = 10.0):
     """ 
     
     Extracts shell X-0.5 < k <X+0.5 of a vector field and 
@@ -382,17 +386,22 @@ def extract_isotropic_shell_X(vector_field,Low,Up):
     
     Based on Philip Grete's transfer function code:
     https://github.com/pgrete/energy-transfer-analysis
-    
+     
     
     Author: James Beattie
         
     """
+    
+    def Gauss_filter(k,k0,sigma=sigma):
+        filter = np.exp(-(k-k0)**2/(2*sigma**2))
+        return filter / filter.max()    
+    
     # The physical size of the domain
     L = 1.0
     
     # The wavenumebr shells (convert into units of 2pi/L)
-    Low = 2 * np.pi / L * Low
-    Up  = 2 * np.pi / L * Up
+    k_minus_dk = 2 * np.pi / L * k_minus_dk
+    k_plus_dk  = 2 * np.pi / L * k_plus_dk
     
     # Take FFT of vector field
     vector_field_FFT = fft.fftn(vector_field,
@@ -418,7 +427,10 @@ def extract_isotropic_shell_X(vector_field,Low,Up):
     k_norm[k_norm == 0] = np.inf
     
     # Set the k_hat for zero wavevectors explicitly to zero
-    shell_k = np.where(np.logical_and(k_norm > Low, k_norm <= Up),vector_field_FFT,0.)
+    if filter == 'tophat':
+        shell_k = np.where(np.logical_and(k_norm > k_minus_dk, k_norm <= k_plus_dk),vector_field_FFT,0.)
+    elif filter == "gauss":
+        shell_k = Gauss_filter(k_norm,(k_minus_dk+k_plus_dk)/2.0) * vector_field_FFT
     
     # Inverse FFT with just the wavenumbers from the shell 
     shell_real = np.fft.ifftn(shell_k,
