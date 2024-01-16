@@ -373,3 +373,56 @@ def generate_anisotropic_powerlaw_field(size:  int,
     amplitude = k_perp**(-(alpha)/2.0)*k_par**(-(beta)/2.0)
 
     return np.fft.ifftn(10*random_field * amplitude).real
+
+def extract_isotropic_shell_X(vector_field,Low,Up):
+    """ 
+    
+    Extracts shell X-0.5 < k <X+0.5 of a vector field and 
+    returns the inverse FFT of the shell. 
+    
+    Based on Philip Grete's transfer function code:
+    https://github.com/pgrete/energy-transfer-analysis
+    
+    
+    Author: James Beattie
+        
+    """
+    # The physical size of the domain
+    L = 1.0
+    
+    # The wavenumebr shells (convert into units of 2pi/L)
+    Low = 2 * np.pi / L * Low
+    Up  = 2 * np.pi / L * Up
+    
+    # Take FFT of vector field
+    vector_field_FFT = fft.fftn(vector_field,
+                                norm='forward',
+                                axes=(1,2,3))
+
+    # Assuming a cubic domain    
+    N = vector_field.shape[1]  
+            
+    # wave vectors
+    kx = 2 * np.pi * fft.fftfreq(N, d=L/N) / L
+    ky = 2 * np.pi * fft.fftfreq(N, d=L/N) / L
+    kz = 2 * np.pi * fft.fftfreq(N, d=L/N) / L
+    
+    kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
+    k = np.array([kx,ky,kz]) # This will be of shape (3, N, N, N)
+
+    # Normalize k to get the unit wavevector
+    # This will be of shape (3, N, N, N)
+    k_norm = np.tile(np.linalg.norm(k, axis=0, keepdims=True), (3, 1, 1, 1)) 
+
+    # Replace zeros in k_norm with np.inf to avoid division by zero
+    k_norm[k_norm == 0] = np.inf
+    
+    # Set the k_hat for zero wavevectors explicitly to zero
+    shell_k = np.where(np.logical_and(k_norm > Low, k_norm <= Up),vector_field_FFT,0.)
+    
+    # Inverse FFT with just the wavenumbers from the shell 
+    shell_real = np.fft.ifftn(shell_k,
+                           axes=(1,2,3),
+                           norm="forward").real
+     
+    return shell_real
