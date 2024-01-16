@@ -62,6 +62,7 @@ def vector_potential(vector_field,
 
     # Assuming a cubic domain    
     N = vector_field.shape[1]  
+    
     # The physical size of the domain
     L = 1.0
     
@@ -99,38 +100,44 @@ def vector_potential(vector_field,
     
     return a, b_recon
 
-def gradient_tensor(vector_field):
+
+def magnetic_helicity(magnetic_vector_field):
     """
-    Compute the gradient tensor of a vector field using 
-    second order differenecs.
+    Compute the magnetic helicity of a vector field.
     
     Author: James Beattie
     """
     
-    # differentials
-    dx = 1./vector_field[X].shape[0]
-    dy = 1./vector_field[Y].shape[0]
-    dz = 1./vector_field[Z].shape[0]
+    # compute the vector potential
+    a, _ = vector_potential(magnetic_vector_field)
     
-    # x component of gradient tensor
-    dFx_dx = (np.roll(vector_field[X],F,axis=X) - np.roll(vector_field[X],B,axis=X))/dx
-    dFy_dx = (np.roll(vector_field[Y],F,axis=X) - np.roll(vector_field[Y],B,axis=X))/dx
-    dFz_dx = (np.roll(vector_field[Z],F,axis=X) - np.roll(vector_field[Z],B,axis=X))/dx
+    # compute the magnetic helicity
+    helicity = np.einsum("i..., i... -> ...",a,magnetic_vector_field)
     
-    # y component of gradient tensor
-    dFx_dy = (np.roll(vector_field[X],F,axis=Y) - np.roll(vector_field[X],B,axis=Y))/dy
-    dFy_dy = (np.roll(vector_field[Y],F,axis=Y) - np.roll(vector_field[Y],B,axis=Y))/dy
-    dFz_dy = (np.roll(vector_field[Z],F,axis=Y) - np.roll(vector_field[Z],B,axis=Y))/dy
-    
-    # z component of gradient tensor
-    dFx_dz = (np.roll(vector_field[X],F,axis=Z) - np.roll(vector_field[X],B,axis=Z))/dz
-    dFy_dz = (np.roll(vector_field[Y],F,axis=Z) - np.roll(vector_field[Y],B,axis=Z))/dz
-    dFz_dz = (np.roll(vector_field[Z],F,axis=Z) - np.roll(vector_field[Z],B,axis=Z))/dz
-    
-    return np.array([[dFx_dx,dFx_dy,dFx_dz],
-                     [dFy_dx,dFy_dy,dFy_dz],
-                     [dFz_dx,dFz_dy,dFz_dz]])
+    return helicity
 
+
+def gradient_tensor(vector_field,
+                    order = 2):
+    """
+    Compute the gradient tensor of a vector field using 
+    either second or fourth order differences.
+    
+    Author: James Beattie
+    """
+    
+    # determine order of derivative
+    if order == 2:
+        grad_fun = gradient_order2
+    elif order == 4:
+        grad_fun = gradient_order4
+    elif order == 6:
+        grad_fun = gradient_order6
+    
+    return np.array([[grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
+                     [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
+                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]])
+    
 
 def orthongonal_tensor_decomposition(tensor_field):
     """
@@ -150,9 +157,12 @@ def orthongonal_tensor_decomposition(tensor_field):
     
     return tensor_sym, tensor_anti, tensor_trace
 
-def stretch_tensor(tensor_field):
+
+def stretch_tensor(vector_field,
+                   tensor_field):
     """
-    Compute the stretch tensor of a tensor field.
+    Compute the stretch tensor of a tensor field along a given
+    vector field (usually magnetic field).
     
     Author: James Beattie
     """
@@ -172,6 +182,14 @@ def stretch_tensor(tensor_field):
     tensor_stretch = np.einsum('ij,ijkl->ijkl',tensor_eigvals,np.einsum('ij,kl->ijkl',tensor_eigvecs,np.identity(3)))
     
     return tensor_stretch
+
+
+def A_iA_j_tensor(vector_field):
+    """
+    Compute the A_iA_j tensor of a vector field.
+    """
+        
+    return np.einsum('i...,j...->ij...',vector_field,vector_field)
 
 
 def helmholtz_decomposition(vector_field: np.ndarray,
@@ -235,6 +253,8 @@ def vector_curl(vector_field,
         grad_fun = gradient_order2
     elif order == 4:
         grad_fun = gradient_order4
+    elif order == 6:
+        grad_fun = gradient_order6
         
     # x component of curl
     dFz_dy = grad_fun(vector_field[Z],gradient_dir=Y)
@@ -265,6 +285,8 @@ def vector_divergence(vector_field,
         grad_fun = gradient_order2
     elif order == 4:
         grad_fun = gradient_order4
+    elif order == 6:
+        grad_fun = gradient_order6
     
     # divergence
     dFx_dx = grad_fun(vector_field[X],gradient_dir=X)
@@ -333,39 +355,6 @@ def field_magnitude(vector_field):
     """
     vector_field = np.array(vector_field)
     return np.sqrt(np.sum(vector_field**2, axis=0))
-
-
-def gradient_order2(scalar_field, gradient_dir):
-    """
-    Compute the gradient of a scalar field in one direction
-    using a two point stencil (second order method).
-    
-    Author: Neco Kriel & James Beattie
-    """
-    
-    # 2dr
-    two_dr = 2./scalar_field.shape[gradient_dir]
-    
-    return (
-        np.roll(scalar_field, F, axis=gradient_dir) - np.roll(scalar_field, B, axis=gradient_dir)/ two_dr )
-    
-def gradient_order4(scalar_field, gradient_dir):
-    """
-    Compute the gradient of a scalar field  in one direction
-    using a five point stencil (fourth order method).
-    
-    Author: James Beattie
-    
-    """
-    
-    # 12dr
-    twelve_dr = 12./scalar_field.shape[gradient_dir]
-    
-    # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
-    return ( - np.roll(scalar_field,2*F,axis=gradient_dir) +  \
-             8*np.roll(scalar_field,F,axis=gradient_dir) - \
-             8*np.roll(scalar_field,B,axis=gradient_dir) + \
-               np.roll(scalar_field,2*B,axis=gradient_dir)) / twelve_dr
 
 
 def field_RMS(scalar_field):
@@ -483,7 +472,7 @@ def TNB_jacobian(vector_field):
 
 
 def TNB_jacobian_stability_analysis(vector_field,
-                                    traceless = True):
+                                    traceless = False):
     """
     Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the TNB coordinate system.
     
@@ -496,12 +485,15 @@ def TNB_jacobian_stability_analysis(vector_field,
         
         # Two conditions for O and X points
         condition = np.abs(J_3) < J_thresh
-        ratio = np.where(condition, J_3 / J_thresh, J_thresh / J_3)
+        ratio = np.where(condition, 
+                         J_thresh / J_3, 
+                         J_3 / J_thresh)
         
         return np.arctan( np.sqrt(ratio**2-1) )
     
     # Compute jacobian of B field
-    jacobian = field_gradient(vector_field)
+    jacobian = gradient_tensor(vector_field,
+                               order=4)
     
     # Make jacobian traceless (numerical errors will result in some trace, which is
     # equivalent to div(B) modes)
@@ -545,4 +537,66 @@ def TNB_jacobian_stability_analysis(vector_field,
     eig_2 = 0.5 * ( trace_M - np.sqrt( - (D + 0j)))
     
     return trace_M, D, eig_1, eig_2, theta_eig(J_thresh,J_3)
+
+
+################################################################
+## Derivative stencil functions 
+################################################################
+
+
+def gradient_order2(scalar_field, gradient_dir, L=1.0):
+    """
+    Compute the gradient of a scalar field in one direction
+    using a two point stencil (second order method).
+    
+    Author: Neco Kriel & James Beattie
+    """
+    
+    # 2dr
+    two_dr = 2. * L /scalar_field.shape[gradient_dir]
+    
+    return (
+        np.roll(scalar_field, F, axis=gradient_dir) - np.roll(scalar_field, B, axis=gradient_dir) ) / two_dr
+    
+    
+def gradient_order4(scalar_field, gradient_dir, L=1.0):
+    """
+    Compute the gradient of a scalar field  in one direction
+    using a five point stencil (fourth order method).
+    
+    Author: James Beattie
+    
+    """
+    
+    # 12dr
+    twelve_dr = 12. * L /scalar_field.shape[gradient_dir]
+    
+    # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
+    return ( - np.roll(scalar_field,2*F,axis=gradient_dir) \
+             + 8*np.roll(scalar_field,F,axis=gradient_dir) \
+             - 8*np.roll(scalar_field,B,axis=gradient_dir) \
+             + np.roll(scalar_field,2*B,axis=gradient_dir)) / twelve_dr
+
+
+def gradient_order6(scalar_field, gradient_dir, L=1.0):
+    """
+    Compute the gradient of a scalar field  in one direction
+    using a seven point stencil (sixth order method).
+    
+    Author: James Beattie
+    
+    """
+    
+    # 60dr
+    twelve_dr = 60. * L /scalar_field.shape[gradient_dir]
+    
+    # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
+    return ( - np.roll(scalar_field,3*B,axis=gradient_dir)   \
+             + 9*np.roll(scalar_field,2*B,axis=gradient_dir) \
+             - 45*np.roll(scalar_field,B,axis=gradient_dir)  \
+             + 45*np.roll(scalar_field,F,axis=gradient_dir)  \
+             - 9*np.roll(scalar_field,2*F,axis=gradient_dir) \
+             + np.roll(scalar_field,3*F,axis=gradient_dir)) / twelve_dr
+
+
 ## END OF LIBRARY
