@@ -29,8 +29,8 @@ X,Y,Z = 0,1,2
 F = -1 # shift forwards
 B = +1 # shift backwards
 
-def vector_potential(vector_field,
-                     debug = False):
+def vector_potential(vector_field   : np.ndarray,
+                     debug          : bool = False ):
     """
     Create the underlying vector potential, a, of a vector field. For a magnetic field,
     assuming a Coulomb Gauage (div(a) = 0), this is the vector potential that satisfies the equation:
@@ -109,7 +109,7 @@ def vector_potential(vector_field,
     return a, b_recon
 
 
-def magnetic_helicity(magnetic_vector_field):
+def magnetic_helicity(magnetic_vector_field : np.ndarray ):
     """
     Compute the magnetic helicity of a vector field.
     
@@ -131,8 +131,8 @@ def magnetic_helicity(magnetic_vector_field):
     return helicity
 
 
-def gradient_tensor(vector_field,
-                    order = 2):
+def gradient_tensor(vector_field    : np.ndarray,
+                    order           : int = 2 ):
     """
     Compute the gradient tensor of a vector field using 
     either second or fourth order differences.
@@ -159,7 +159,7 @@ def gradient_tensor(vector_field,
                      [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]])
     
 
-def orthogonal_tensor_decomposition(tensor_field):
+def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
     """
     Compute the symmetric, anti-symmetric and bulk components of a tensor field.
     
@@ -188,7 +188,7 @@ def orthogonal_tensor_decomposition(tensor_field):
 
 
 
-def compute_eigenvalues(args):
+def compute_eigenvalues(args : tuple):
     """
     Top-level function for computing eigenvalues
 
@@ -210,9 +210,9 @@ def compute_eigenvalues(args):
     return index, eigvals
 
 
-def eigs_stretch_tensor(vector_field,
-                        tensor_field,
-                        n_processes = 4):
+def eigs_stretch_tensor(vector_field    : np.ndarray,
+                        tensor_field    : np.ndarray,
+                        n_processes     : int = 4 ):
     """
     Compute the stretch tensor of a tensor field along a given
     vector field (usually the magnetic field).
@@ -292,7 +292,7 @@ def eigs_stretch_tensor(vector_field,
     return eigenvalues
 
 
-def A_iA_j_tensor(vector_field):
+def A_iA_j_tensor(vector_field : np.ndarray):
     """
     Compute the A_iA_j tensor of a vector field.
     
@@ -309,8 +309,8 @@ def A_iA_j_tensor(vector_field):
     return np.einsum('i...,j...->ij...',vector_field,vector_field)
 
 
-def helmholtz_decomposition(vector_field: np.ndarray,
-                            n_workers: int = 1):
+def helmholtz_decomposition(vector_field : np.ndarray,
+                            n_workers    : int = 1 ):
     """
     Compute the irrotational and solenoidal components of a vector field.
     
@@ -364,8 +364,8 @@ def helmholtz_decomposition(vector_field: np.ndarray,
     return F_irrot, F_solen
 
 
-def vector_curl(vector_field,
-                order = 2):
+def vector_curl(vector_field    : np.ndarray,
+                order           : int = 2 ):
     """
     Compute the vector curl (assumes periodic boundary conditions) 
     using either second or fourth order finite differences
@@ -404,8 +404,8 @@ def vector_curl(vector_field,
                      dFy_dx - dFx_dy])
     
 
-def vector_divergence(vector_field,
-                        order = 2):
+def vector_divergence(vector_field  : np.ndarray,
+                        order       : int = 2 ):
     """
     Compute the vector divergence (assumes periodic boundary conditions)
     using either second or fourth order finite differences
@@ -433,7 +433,7 @@ def vector_divergence(vector_field,
     return dFx_dx + dFy_dy + dFz_dz
     
     
-def scalar_laplacian(scalar_field):
+def scalar_laplacian(scalar_field: np.ndarray):
     """
     Compute the scalar laplacian (assumes periodic boundary conditions)
     using second order finite differences
@@ -460,7 +460,8 @@ def scalar_laplacian(scalar_field):
     return d2Fx_dx2 + d2Fy_dy2 + d2Fz_dz2
         
         
-def vector_cross_product(vector1, vector2):
+def vector_cross_product(vector1 : np.ndarray,
+                         vector2 : np.ndarray):
     """
     Compute the vector cross product of two vectors.
     
@@ -484,7 +485,8 @@ def vector_cross_product(vector1, vector2):
     return vector3    
 
 
-def vector_dot_product(vector1, vector2):
+def vector_dot_product(vector1 : np.ndarray,
+                       vector2 : np.ndarray):
     """
     Compute the vector dot product of two vectors.
     
@@ -506,7 +508,7 @@ def vector_dot_product(vector1, vector2):
     return scalar
 
 
-def field_magnitude(vector_field):
+def field_magnitude(vector_field : np.ndarray):
     """
     Compute the vector magnitude of a vector.
     
@@ -523,7 +525,7 @@ def field_magnitude(vector_field):
     return np.sqrt(np.sum(vector_field**2, axis=0))
 
 
-def field_RMS(scalar_field):
+def field_RMS(scalar_field : np.ndarray):
     """
     Compute the root-mean-squared of a field.
     
@@ -539,7 +541,7 @@ def field_RMS(scalar_field):
     return np.sqrt(np.mean(scalar_field**2))
 
 
-def field_gradient(scalar_field):
+def field_gradient(scalar_field : np.ndarray):
     """
     Compute the gradient of a scalar field.
     
@@ -561,7 +563,7 @@ def field_gradient(scalar_field):
     return np.array(field_gradient)
 
 
-def compute_TNB_basis(vector_field):
+def compute_TNB_basis(vector_field : np.ndarray):
     """
     Compute the Fressnet frame of a vector field (TNB basis).
     
@@ -601,7 +603,7 @@ def compute_TNB_basis(vector_field):
     return t_basis, n_basis, b_basis, kappa
 
 
-def TNB_coordinate_transformation(vector_field):
+def TNB_coordinate_transformation(vector_field : np.ndarray):
     """
     Transform a vector field into the TNB coordinate system.
     
@@ -628,51 +630,8 @@ def TNB_coordinate_transformation(vector_field):
     return vector_field_TNB
 
 
-def TNB_jacobian(vector_field):
-    """
-    Compute the Jacobian of a vector field in the TNB coordinate system.
-    
-    Note: the Jacobian is a 2D tensor which is only appropriate for 3D fields where
-    there is no divergence component. This reduces the degress of freedom from 3 to 2.
-    
-    Author: James Beattie
-    
-    Args:
-        args (_type_): 
-
-    Returns:
-        _type_: _description_
-    
-    """
-    
-    # compute the vector field in the TNB basis
-    vector_field_TNB = TNB_coordinate_transformation(vector_field)
-    
-    # indexes for the TNB basis
-    n_basis = 1
-    b_basis = 2
-    
-    # differentials
-    two_dn = 2./vector_field_TNB[n_basis].shape[0]
-    two_db = 2./vector_field_TNB[b_basis].shape[0]
-    
-    # now compute a 2D jacobian tensor for each (x, y, z) point
-    # dn_basis
-    dFn_basis_dn_basis = (np.roll(vector_field_TNB[n_basis],F,axis=n_basis) - np.roll(vector_field_TNB[n_basis],B,axis=n_basis))/two_dn
-    dFb_basis_dn_basis = (np.roll(vector_field_TNB[b_basis],F,axis=n_basis) - np.roll(vector_field_TNB[b_basis],B,axis=n_basis))/two_dn
-    
-    # db_basis
-    dFn_basis_db_basis = (np.roll(vector_field_TNB[n_basis],F,axis=b_basis) - np.roll(vector_field_TNB[n_basis],B,axis=b_basis))/two_db
-    dFb_basis_db_basis = (np.roll(vector_field_TNB[b_basis],F,axis=b_basis) - np.roll(vector_field_TNB[b_basis],B,axis=b_basis))/two_db
-    
-    jacobian = np.array([[dFn_basis_dn_basis,dFn_basis_db_basis],
-                         [dFb_basis_dn_basis,dFb_basis_db_basis]])
-    
-    return jacobian
-
-
-def TNB_jacobian_stability_analysis(vector_field,
-                                    traceless = True):
+def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
+                                    traceless       : bool = True ):
     """
     Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the 
     TNB coordinate system.
@@ -687,7 +646,8 @@ def TNB_jacobian_stability_analysis(vector_field,
     
     """
     
-    def theta_eig(J_thresh,J_3):
+    def theta_eig(J_thresh  : np.ndarray,
+                  J_3       : np.ndarray):
         """
         Compute the angle between the eigenvectors of the Jacobian.
         
@@ -763,7 +723,9 @@ def TNB_jacobian_stability_analysis(vector_field,
 ################################################################
 
 
-def gradient_order2(scalar_field, gradient_dir, L=1.0):
+def gradient_order2(scalar_field : np.ndarray, 
+                    gradient_dir : int, 
+                    L            : float = 1.0 ):
     """
     Compute the gradient of a scalar field in one direction
     using a two point stencil (second order method).
@@ -785,7 +747,9 @@ def gradient_order2(scalar_field, gradient_dir, L=1.0):
         np.roll(scalar_field, F, axis=gradient_dir) - np.roll(scalar_field, B, axis=gradient_dir) ) / two_dr
     
     
-def gradient_order4(scalar_field, gradient_dir, L=1.0):
+def gradient_order4(scalar_field : np.ndarray, 
+                    gradient_dir : int, 
+                    L            : float = 1.0 ):
     """
     Compute the gradient of a scalar field  in one direction
     using a five point stencil (fourth order method).
@@ -810,7 +774,9 @@ def gradient_order4(scalar_field, gradient_dir, L=1.0):
              + np.roll(scalar_field,2*B,axis=gradient_dir)) / twelve_dr
 
 
-def gradient_order6(scalar_field, gradient_dir, L=1.0):
+def gradient_order6(scalar_field : np.ndarray, 
+                    gradient_dir : int, 
+                    L            : float = 1.0 ):
     """
     Compute the gradient of a scalar field  in one direction
     using a seven point stencil (sixth order method).
