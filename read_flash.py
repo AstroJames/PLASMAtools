@@ -625,12 +625,11 @@ class Fields():
         if field_str == "helmholtz":
             self.read("vel")
             
-            x = np.linspace(-0.5, 0.5, self.velx.shape[0])
             vel_cube = np.zeros((self.velx.shape[0],self.velx.shape[1],self.velx.shape[2],3))
             vel_cube[..., 0] = self.velx
             vel_cube[..., 1] = self.vely
             vel_cube[..., 2] = self.velz 
-            F_irrot, F_solen = dvf.helmholtz_decomposition(vel_cube,x,n_workers)
+            F_irrot, F_solen = dvf.helmholtz_decomposition(vel_cube,n_workers)
             
             for idx, coords in enumerate(["x", "y", "z"]):
                 setattr(self, f"vel_comp{coords}", F_irrot[..., idx])
