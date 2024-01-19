@@ -295,11 +295,13 @@ def create_helical_field(N, k_index, A_plus=1, A_minus=0):
     return field
 
 def generate_isotropic_powerlaw_field(size:  int,
-                            alpha: float = 5./3.) -> np.ndarray:
+                                      alpha: float = 5./3.) -> np.ndarray:
     """
     This computes a random field with a power-law power spectrum. The power spectrum
     is P(k) = k^-alpha. The field is generated in Fourier space, and then inverse
     transformed to real space.
+
+    Author: James Beattie (2023)
 
     Args:
         size (int): the linear dimension of the 3D field
