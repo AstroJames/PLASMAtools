@@ -290,7 +290,7 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
 
     # Store the results in the eigenvalues array
     for index, eigvals in results:
-        eigenvalues[(slice(None),) + index] = eigvals
+        eigenvalues[(slice(None),) + index] = np.sort(eigvals)
 
     # Clean up shared memory
     shm.close()
