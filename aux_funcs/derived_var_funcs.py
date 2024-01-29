@@ -132,18 +132,24 @@ def magnetic_helicity(magnetic_vector_field : np.ndarray ):
 
 
 def gradient_tensor(vector_field    : np.ndarray,
-                    order           : int = 2 ):
+                    order           : int = 4 ):
     """
-    Compute the gradient tensor of a vector field using 
-    either second or fourth order differences.
+    Compute the gradient tensor of a vector field 
+    using finite differences.
     
     Author: James Beattie
 
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field, 
+        where 3 is the vector component and N is the number of grid 
+        points in each direction
+        order (int): order of finite difference used to compute the
+        gradient tensor. Options are 2, 4 and 6. Default is 4.
 
     Returns:
-        _type_: _description_
+        gradient_tensor: the gradient tensor of the vector field, 
+        \partial_i f_j
+    
     """
     
     # determine order of derivative
@@ -156,7 +162,7 @@ def gradient_tensor(vector_field    : np.ndarray,
     
     return np.array([[grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
                      [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
-                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]])
+                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]).T
     
 
 def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
@@ -294,19 +300,44 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
 
 def A_iA_j_tensor(vector_field : np.ndarray):
     """
-    Compute the A_iA_j tensor of a vector field.
+    Compute the A_iA_j tensor field from a vector field.
     
     Author: James Beattie
     
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field, where 
+        3 is the vector component and N is the number of grid points in each 
+        direction
 
     Returns:
-        _type_: _description_
+        A_i_A_j: the A_iA_j tensor field
     
     """
         
     return np.einsum('i...,j...->ij...',vector_field,vector_field)
+
+
+def tensor_contraction(tensor_field_0 : np.ndarray,
+                       tensor_field_1 : np.ndarray):
+    """
+    Compute the A_iA_j tensor field from a vector field.
+    
+    Author: James Beattie
+    
+    Args:
+        tensor_field_0 (np.ndarray): (i,j),N,N,N array of tensor field, where 
+        (i,j) are the tensor components and N is the number of grid points in each 
+        direction
+        tensor_field_1 (np.ndarray): (i,j),N,N,N array of tensor field, where 
+        (i,j) are the tensor components and N is the number of grid points in each 
+        direction
+
+    Returns:
+        A_i_A_jB_i_B_j : the A_i_A_jB_i_B_j contraction scalar field.
+    
+    """
+        
+    return np.einsum('ij...,ij...->...',tensor_field_0,tensor_field_1)
 
 
 def helmholtz_decomposition(vector_field : np.ndarray,
@@ -324,6 +355,7 @@ def helmholtz_decomposition(vector_field : np.ndarray,
     
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
+    # TODO: change the shape of F to be (3, N, N, N) instead of (N, N, N, 3) (consistent with other functions)
     
     shape = vector_field.shape[:-1]
     x     = np.linspace(-0.5,0.5,vector_field.shape[0]) # assuming a domian of [-L/2, L/2]
@@ -501,11 +533,8 @@ def vector_dot_product(vector1 : np.ndarray,
         _type_: _description_
     
     """
-    scalar = np.sum([
-        v1_comp * v2_comp
-        for v1_comp, v2_comp in zip(vector1, vector2)
-    ], axis=0)
-    return scalar
+    
+    return np.einsum("i...,i...->...",vector1,vector2)
 
 
 def field_magnitude(vector_field : np.ndarray):
@@ -588,9 +617,15 @@ def compute_TNB_basis(vector_field : np.ndarray):
     ])
     ## ---- COMPUTE NORMAL BASIS
     ## f_i df_j/dx_i
-    n_basis_term1 = np.einsum("ixyz,jixyz->jxyz", vector_field, gradient_tensor)
+    n_basis_term1 = np.einsum("ixyz,jixyz->jxyz", 
+                              vector_field, 
+                              gradient_tensor)
     ## f_i f_j f_m df_m/dx_i
-    n_basis_term2 = np.einsum("ixyz,jxyz,mxyz,mixyz->jxyz", vector_field, vector_field, vector_field, gradient_tensor)
+    n_basis_term2 = np.einsum("ixyz,jxyz,mxyz,mixyz->jxyz", 
+                              vector_field, 
+                              vector_field, 
+                              vector_field, 
+                              gradient_tensor)
     ## (f_i df_j/dx_i) / (f_k f_k) - (f_i f_j f_m df_m/dx_i) / (f_k f_k)^2
     n_basis = n_basis_term1 / field_magn**2 - n_basis_term2 / field_magn**4
     ## field curvature
