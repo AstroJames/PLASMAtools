@@ -160,9 +160,9 @@ def gradient_tensor(vector_field    : np.ndarray,
     elif order == 6:
         grad_fun = gradient_order6
     
-    return np.array([[grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
+    return np.einsum("ij...->ji...",np.array([[grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
                      [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
-                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]).T
+                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]))
     
 
 def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
