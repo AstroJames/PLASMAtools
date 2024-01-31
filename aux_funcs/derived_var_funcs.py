@@ -194,7 +194,6 @@ def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
     return tensor_sym, tensor_anti, tensor_trace
 
 
-
 def compute_eigenvalues(args : tuple):
     """
     Top-level function for computing eigenvalues
@@ -299,23 +298,27 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
     return eigenvalues
 
 
-def A_iA_j_tensor(vector_field : np.ndarray):
+def tensor_outer_product(vector_field_0 : np.ndarray,
+                         vector_field_1 : np.ndarray):
     """
-    Compute the A_iA_j tensor field from a vector field.
+    Compute the A_iB_j tensor field from a vector field.
     
     Author: James Beattie
     
     Args:
-        vector_field (np.ndarray): 3,N,N,N array of vector field, where 
+        vector_field_0 (np.ndarray): 3,N,N,N array of vector field, where 
+        3 is the vector component and N is the number of grid points in each 
+        direction
+        vector_field_1 (np.ndarray): 3,N,N,N array of vector field, where 
         3 is the vector component and N is the number of grid points in each 
         direction
 
     Returns:
-        A_i_A_j: the A_iA_j tensor field
+        A_i_B_j: the A_iB_j tensor field
     
     """
         
-    return np.einsum('i...,j...->ij...',vector_field,vector_field)
+    return np.einsum('i...,j...->ij...',vector_field_0,vector_field_1)
 
 
 def tensor_contraction(tensor_field_0 : np.ndarray,
@@ -712,18 +715,18 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     # Make jacobian traceless (numerical errors will result in some trace, which is
     # equivalent to div(B) modes)
     if traceless:   
-        jacobian = jacobian - (1/3) * np.einsum("xyz, ...i",
-                                                np.einsum("iixyz",
+        jacobian = jacobian - (1/3) * np.einsum("..., ij... -> ij...",
+                                                np.einsum("ii...",
                                                         jacobian),
                                                 np.eye(3))
     
     # Compute TNB basis
     t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
     X   = np.array([b_basis,n_basis,t_basis])
-    X_T = np.einsum("ijxyz->jixyz",X)
+    X_T = np.einsum("ij...->ji...",X)
     
     # Put jacobian into the TNB basis
-    trans_jacobian = np.einsum('ab...,bc...,dc... -> adxyz', 
+    trans_jacobian = np.einsum('ab...,bc...,dc... -> ad...', 
                                X, 
                                jacobian, 
                                X_T)
@@ -737,7 +740,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                      [M_21, M_22]])
     
     # Compute trace and determinant of M
-    trace_M = np.einsum("iixyz",M)
+    trace_M = np.einsum("ii...",M)
     det_M   = M_11 * M_22 - M_12 * M_21
     
     # Characteristic equation
