@@ -16,7 +16,6 @@
 import scipy.fft as fft
 import numpy as np
 from multiprocessing import Pool, shared_memory
-import ctypes
 
 ## ###############################################################
 ## Derived Variable Functions
@@ -183,15 +182,17 @@ def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
     tensor_transpose = np.einsum("ij... -> ji...",tensor_field)
     
     # bulk component
-    tensor_trace = (1./3.) * np.einsum("ii...",tensor_field)
+    tensor_bulk = (1./3.) * np.einsum('...,ij...->ij...',
+                                       np.einsum("ii...",tensor_field),
+                                       np.identity(3))
     
     # symmetric component
-    tensor_sym = 0.5 * (tensor_field + tensor_transpose) -  np.einsum('...,ij...->ij...',tensor_trace,np.identity(3))
+    tensor_sym = 0.5 * (tensor_field + tensor_transpose) - tensor_bulk
     
     # anti-symmetric component
     tensor_anti = 0.5 * (tensor_field - tensor_transpose)
     
-    return tensor_sym, tensor_anti, tensor_trace
+    return tensor_sym, tensor_anti, tensor_bulk
 
 
 def compute_eigenvalues(args : tuple):
@@ -216,9 +217,10 @@ def compute_eigenvalues(args : tuple):
     return index, eigvals
 
 
-def eigs_stretch_tensor(vector_field    : np.ndarray,
-                        tensor_field    : np.ndarray,
-                        n_processes     : int = 4 ):
+def eigs_stretch_tensor(vector_field : np.ndarray,
+                        tensor_field : np.ndarray,
+                        n_processes  : int = 4,
+                        parallel     : bool = False):
     """
     Compute the stretch tensor of a tensor field along a given
     vector field (usually the magnetic field).
@@ -248,9 +250,9 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
         _type_: _description_
     
     """
-    
-    print(f"stretch_tensor: computing eigen values of local " + 
-          f"stretching tensor with {n_processes} processes")
+        
+    # the number of grid elements
+    N = vector_field.shape[1]       # assumes a cubic domain
     
     # symmetric component
     tensor_sym, _, _ = orthogonal_tensor_decomposition(tensor_field)
@@ -267,36 +269,58 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
                                  X_T)
     
     # Compute eigenvalues of the stretching tensor
+    if parallel:
+        print(f"stretch_tensor: computing eigen values of local " + 
+            f"stretching tensor with {n_processes} processes")
+        # Create shared memory for trans_tensor_sym
+        shm = shared_memory.SharedMemory(create=True, size=trans_tensor_sym.nbytes)
+        trans_tensor_sym_shared = np.ndarray(trans_tensor_sym.shape, dtype=trans_tensor_sym.dtype, buffer=shm.buf)
+        np.copyto(trans_tensor_sym_shared, trans_tensor_sym)  # Copy data to shared memory
+
+        # Assuming trans_tensor_sym has shape (3, 3, N, N, N)
+        N = trans_tensor_sym.shape[2]
+        indices = [(i, j, k) for i in range(N) for j in range(N) for k in range(N)]
+        
+        # Initialize an array to store the eigenvalues
+        eigenvalues = np.zeros((3, N, N, N))
+
+        # Prepare arguments for multiprocessing, including shared memory details
+        args = [(index, trans_tensor_sym.shape, trans_tensor_sym.dtype, shm.name) for index in indices]
+
+        # Use multiprocessing to compute eigenvalues in parallel
+        with Pool(processes=n_processes) as pool:
+            results = pool.map(compute_eigenvalues, args)
+
+        # Store the results in the eigenvalues array
+        for index, eigvals in results:
+            eigenvalues[(slice(None),) + index] = np.sort(eigvals)
+
+        # Clean up shared memory
+        shm.close()
+        shm.unlink()
+    else:
+        sorted_eigenvalues = np.zeros((3, N, N, N))
+        for x in range(N):
+            for y in range(N):
+                for z in range(N):
+                    # Extract the 3x3 matrix for this position
+                    matrix = trans_tensor_sym[:, :, x, y, z]
+
+                    # Compute and sort the eigenvalues
+                    eigenvalues = np.linalg.eigvalsh(matrix)
+                    sorted_eigenvalues[:, x, y, z] = np.sort(eigenvalues)
     
-   # Create shared memory for trans_tensor_sym
-    shm = shared_memory.SharedMemory(create=True, size=trans_tensor_sym.nbytes)
-    trans_tensor_sym_shared = np.ndarray(trans_tensor_sym.shape, dtype=trans_tensor_sym.dtype, buffer=shm.buf)
-    np.copyto(trans_tensor_sym_shared, trans_tensor_sym)  # Copy data to shared memory
+    return sorted_eigenvalues
 
-    # Assuming trans_tensor_sym has shape (3, 3, N, N, N)
-    N = trans_tensor_sym.shape[2]
-    indices = [(i, j, k) for i in range(N) for j in range(N) for k in range(N)]
-    
-    # Initialize an array to store the eigenvalues
-    eigenvalues = np.zeros((3, N, N, N))
-
-    # Prepare arguments for multiprocessing, including shared memory details
-    args = [(index, trans_tensor_sym.shape, trans_tensor_sym.dtype, shm.name) for index in indices]
-
-    # Use multiprocessing to compute eigenvalues in parallel
-    with Pool(processes=n_processes) as pool:
-        results = pool.map(compute_eigenvalues, args)
-
-    # Store the results in the eigenvalues array
-    for index, eigvals in results:
-        eigenvalues[(slice(None),) + index] = np.sort(eigvals)
-
-    # Clean up shared memory
-    shm.close()
-    shm.unlink()
-    
-    return eigenvalues
-
+        # print("reshape one")
+        # reshaped_trans_sym_tensor = np.reshape(trans_tensor_sym,
+        #                                        (N**3,3,3))    
+        # print("eigvals")    
+        # eig_vals = np.linalg.eigvalsh(reshaped_trans_sym_tensor)
+        # print("reshape two")
+        # eig_vals = np.sort(eig_vals,axis=1)
+        # #eigenvalues = eig_vals.reshape(N,N,N,3).transpose(3,0,1,2)
+        # Iterate over each position in the (N, N, N) grid
 
 def tensor_outer_product(vector_field_0 : np.ndarray,
                          vector_field_1 : np.ndarray):
