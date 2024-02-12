@@ -124,11 +124,50 @@ def magnetic_helicity(magnetic_vector_field : np.ndarray ):
     # compute the vector potential
     a, _ = vector_potential(magnetic_vector_field)
     
-    # compute the magnetic helicity
-    helicity = np.einsum("i..., i... -> ...",a,magnetic_vector_field)
-    
-    return helicity
+    # compute the magnetic helicity    
+    return vector_dot_product(a,magnetic_vector_field)
 
+def kinetic_helicity(velocity_vector_field : np.ndarray ):
+    """
+    Compute the kinetic helicity of a vector field.
+    
+    Author: James Beattie
+    
+    Args:
+        args (_type_):
+        
+    Returns:
+        _type_: _description_
+    
+    """
+    
+    # compute the vorticity
+    omega = vector_curl(velocity_vector_field)
+    
+    # compute the kinetic helicity
+    return vector_dot_product(omega,velocity_vector_field)
+    
+    
+def current_helicity(magnetic_vector_field : np.ndarray ):
+    """
+    Compute the kinetic helicity of a vector field.
+    
+    Author: James Beattie
+    
+    Args:
+        args (_type_):
+        
+    Returns:
+        _type_: _description_
+    
+    """
+
+    # compute the vorticity
+    current = ( 1 / (4*np.pi) ) * vector_curl(magnetic_vector_field)
+    
+    # compute the kinetic helicity
+    return vector_dot_product(current,magnetic_vector_field)
+    
 
 def gradient_tensor(vector_field    : np.ndarray,
                     order           : int = 4 ):
