@@ -9,6 +9,8 @@ Most of the post-processing functions are contained within `aux_funcs/derived_va
 Some of the functions are:
 * vector potential
 * magnetic helicity
+* current helicity
+* kinetic helicity
 * gradient tensor
 * orthogonal tensor decomposition
 * eigen values of the stretching tensor
