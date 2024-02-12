@@ -160,9 +160,10 @@ def gradient_tensor(vector_field    : np.ndarray,
         grad_fun = gradient_order6
     
     return np.einsum("ij...->ji...",
-                     np.array([[grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
-                     [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
-                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]))
+                     np.array([
+                         [grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
+                         [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
+                         [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]))
     
 
 def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
@@ -263,7 +264,7 @@ def eigs_stretch_tensor(vector_field : np.ndarray,
     X_T = np.einsum("ij... -> ji ...",X)
     
     # Put stretching tensor into the TNB basis
-    trans_tensor_sym = np.einsum('ij..., jk..., kl... -> il...', 
+    trans_tensor_sym = np.einsum('ab...,bc...,cd... -> ad...', 
                                  X, 
                                  tensor_sym, 
                                  X_T)
@@ -645,11 +646,11 @@ def compute_TNB_basis(vector_field : np.ndarray):
     ])
     ## ---- COMPUTE NORMAL BASIS
     ## f_i df_j/dx_i
-    n_basis_term1 = np.einsum("ixyz,jixyz->jxyz", 
+    n_basis_term1 = np.einsum("i...,ji...->j...", 
                               vector_field, 
                               gradient_tensor)
     ## f_i f_j f_m df_m/dx_i
-    n_basis_term2 = np.einsum("ixyz,jxyz,mxyz,mixyz->jxyz", 
+    n_basis_term2 = np.einsum("i...,j...,m...,mi...->j...", 
                               vector_field, 
                               vector_field, 
                               vector_field, 
@@ -697,7 +698,9 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                                     traceless       : bool = True ):
     """
     Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the 
-    TNB coordinate system.
+    TNB coordinate system of an underlying vector field.
+    
+    See: https://arxiv.org/pdf/2312.15589.pdf
     
     Author: James Beattie
     
@@ -713,6 +716,8 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                   J_3       : np.ndarray):
         """
         Compute the angle between the eigenvectors of the Jacobian.
+        
+        See: https://arxiv.org/pdf/2312.15589.pdf
         
         Author: James Beattie
         
@@ -734,7 +739,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     
     # Compute jacobian of B field
     jacobian = gradient_tensor(vector_field,
-                               order=4)
+                               order=6)
     
     # Make jacobian traceless (numerical errors will result in some trace, which is
     # equivalent to div(B) modes)
@@ -750,7 +755,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     X_T = np.einsum("ij...->ji...",X)
     
     # Put jacobian into the TNB basis
-    trans_jacobian = np.einsum('ab...,bc...,dc... -> ad...', 
+    trans_jacobian = np.einsum('ab...,bc...,cd... -> ad...', 
                                X, 
                                jacobian, 
                                X_T)
@@ -771,6 +776,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     D = 4 * det_M - trace_M**2
     
     # J values for openning angles of X and O point
+    # (there physicall are currents)
     J_3         = M_21 - M_12
     J_thresh    = np.sqrt( (M_11 - M_22)**2 + (M_12 + M_21)**2 )
     
@@ -778,8 +784,93 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     eig_1 = 0.5 * ( trace_M + np.sqrt( - (D + 0j)))
     eig_2 = 0.5 * ( trace_M - np.sqrt( - (D + 0j)))
     
-    return trace_M, D, eig_1, eig_2, theta_eig(J_thresh,J_3)
+    return trace_M, D, eig_1, eig_2, J_3, J_thresh, theta_eig(J_thresh,J_3)
 
+def classification_of_critical_points(trace_M       : np.ndarray,
+                                        D           : np.ndarray,
+                                        J_3         : np.ndarray,
+                                        J_thresh    : np.ndarray,
+                                        eig_1       : np.ndarray,
+                                        eig_2       : np.ndarray):
+        """
+        Classify the critical points of the 2D reduced Jacobian of the B field.
+    
+        See: https://arxiv.org/pdf/2312.15589.pdf
+        
+        Args:
+            trace_M (np.ndarray):   trace of the 2D reduced Jacobian of the B field
+            D (np.ndarray):         determinant of the 2D reduced Jacobian of the B field
+            J_3 (np.ndarray):       J_3 value of the 2D reduced Jacobian of the B field
+            J_thresh (np.ndarray):  J threshold value of the 2D reduced Jacobian of the B field
+            eig_1 (np.ndarray):     eigen value 1 of the 2D reduced Jacobian of the B field
+            eig_2 (np.ndarray):     eigen value 2 of the 2D reduced Jacobian of the B field
+            
+        Returns:
+            classification_array (np.ndarray): 3D array of the critical point types
+        """
+        
+        is_3D = np.abs(trace_M) > 0.0
+        is_2D = np.isclose(trace_M,0.0)
+        is_real_eig = np.abs(J_3) < J_thresh
+        is_imag_eig = np.abs(J_3) > J_thresh
+        is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
+            
+        # real and imaginary components of the eigenvalues
+        eig1_real = np.real(eig_1)
+        eig2_real = np.real(eig_2)
+        
+        # array initialisation to store each of the 9 critical point types
+        classification_array = np.repeat(np.zeros_like(trace_M)[np.newaxis,...],
+                                         9,
+                                         axis=0)
+        
+        # 3D X point (trace > 0, determinant < 0, real eigenvalues less than 0)
+        classification_array[0,...] = np.logical_and.reduce([is_3D, 
+                                                             is_real_eig, 
+                                                             eig1_real*eig2_real < 0.0])
+        
+        # 3D O point (repelling; trace > 0, determinant > 0, conjugate eigenvalues equal)
+        classification_array[1,...] = np.logical_and.reduce([is_3D, 
+                                                             is_imag_eig, 
+                                                             trace_M > 0.0])
+        
+        # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
+        classification_array[1,...] += np.logical_and.reduce([is_3D, 
+                                                              is_imag_eig, 
+                                                              trace_M < 0.0])
+        
+        # 3D repelling (trace =/= 0, determinant <= 0, real eigenvalues greater than 0)
+        classification_array[3,...] = np.logical_and.reduce([is_3D, 
+                                                             is_real_eig, 
+                                                             eig1_real > 0.0, 
+                                                             eig2_real > 0.0])
+                                                
+        # 3D attracting (trace =/= 0, determinant <= 0, real eigenvalues less than 0)
+        classification_array[4,...] = np.logical_and.reduce([is_3D, 
+                                                             is_real_eig, 
+                                                             eig1_real < 0.0, 
+                                                             eig2_real < 0.0])
+        
+        # 3D antiparallel (trace =/= 0, determinant < 0, either real component of eigenvalues = 0)
+        classification_array[5,...] = np.logical_and.reduce([is_3D, 
+                                                             is_parallel])
+        
+        # 2D X point (trace = 0, determinant < 0, real component of eigenvalues equal in opposite sign)
+        classification_array[6,...] = np.logical_and.reduce([is_2D, 
+                                                             is_real_eig])
+        
+        # 2D O point (trace = 0, determinant > 0, imaginary component of eigenvalues equal in opposite sign)
+        classification_array[7,...] = np.logical_and.reduce([is_2D, 
+                                                             is_imag_eig])
+        
+        # 2D antiparallel (trace = 0, determinant = 0, all eigenvalues = 0)
+        classification_array[8,...] = np.logical_and.reduce([is_2D, 
+                                                             is_parallel])
+        
+        return classification_array
+    
+        
+        
 
 ################################################################
 ## Derivative stencil functions 
