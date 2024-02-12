@@ -7,8 +7,8 @@ Currently the reading of FLASH data is handled by the `read_flash.py` code, whic
 Most of the post-processing functions are contained within `aux_funcs/derived_var_funcs.py` and `aux_funcs/spectral_var_funcs.py`, for derived variable functions and spectral variable functions, respectively. 
 
 Some of the functions are:
-> vector potential
-> magnetic helicity
+. vector potential
+. magnetic helicity
 > gradient tensor
 > orthogonal tensor decomposition
 > eigen values of the stretching tensor
