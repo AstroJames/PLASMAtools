@@ -16,7 +16,6 @@
 import scipy.fft as fft
 import numpy as np
 from multiprocessing import Pool, shared_memory
-import ctypes
 
 ## ###############################################################
 ## Derived Variable Functions
@@ -125,25 +124,70 @@ def magnetic_helicity(magnetic_vector_field : np.ndarray ):
     # compute the vector potential
     a, _ = vector_potential(magnetic_vector_field)
     
-    # compute the magnetic helicity
-    helicity = np.einsum("i..., i... -> ...",a,magnetic_vector_field)
-    
-    return helicity
+    # compute the magnetic helicity    
+    return vector_dot_product(a,magnetic_vector_field)
 
+def kinetic_helicity(velocity_vector_field : np.ndarray ):
+    """
+    Compute the kinetic helicity of a vector field.
+    
+    Author: James Beattie
+    
+    Args:
+        args (_type_):
+        
+    Returns:
+        _type_: _description_
+    
+    """
+    
+    # compute the vorticity
+    omega = vector_curl(velocity_vector_field)
+    
+    # compute the kinetic helicity
+    return vector_dot_product(omega,velocity_vector_field)
+    
+    
+def current_helicity(magnetic_vector_field : np.ndarray ):
+    """
+    Compute the kinetic helicity of a vector field.
+    
+    Author: James Beattie
+    
+    Args:
+        args (_type_):
+        
+    Returns:
+        _type_: _description_
+    
+    """
+
+    # compute the vorticity
+    current = ( 1 / (4*np.pi) ) * vector_curl(magnetic_vector_field)
+    
+    # compute the kinetic helicity
+    return vector_dot_product(current,magnetic_vector_field)
+    
 
 def gradient_tensor(vector_field    : np.ndarray,
-                    order           : int = 2 ):
+                    order           : int = 4 ):
     """
-    Compute the gradient tensor of a vector field using 
-    either second or fourth order differences.
+    Compute the gradient tensor of a vector field 
+    using finite differences.
     
     Author: James Beattie
 
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field, 
+        where 3 is the vector component and N is the number of grid 
+        points in each direction
+        order (int): order of finite difference used to compute the
+        gradient tensor. Options are 2, 4 and 6. Default is 4.
 
     Returns:
-        _type_: _description_
+        gradient_tensor: the gradient tensor of the vector field, 
+        \partial_i f_j
+    
     """
     
     # determine order of derivative
@@ -154,9 +198,11 @@ def gradient_tensor(vector_field    : np.ndarray,
     elif order == 6:
         grad_fun = gradient_order6
     
-    return np.array([[grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
-                     [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
-                     [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]])
+    return np.einsum("ij...->ji...",
+                     np.array([
+                         [grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
+                         [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
+                         [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]))
     
 
 def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
@@ -176,16 +222,17 @@ def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
     tensor_transpose = np.einsum("ij... -> ji...",tensor_field)
     
     # bulk component
-    tensor_trace = (1./3.) * np.einsum("ii...",tensor_field)
+    tensor_bulk = (1./3.) * np.einsum('...,ij...->ij...',
+                                       np.einsum("ii...",tensor_field),
+                                       np.identity(3))
     
     # symmetric component
-    tensor_sym = 0.5 * (tensor_field + tensor_transpose) -  np.einsum('...,ij...->ij...',tensor_trace,np.identity(3))
+    tensor_sym = 0.5 * (tensor_field + tensor_transpose) - tensor_bulk
     
     # anti-symmetric component
     tensor_anti = 0.5 * (tensor_field - tensor_transpose)
     
-    return tensor_sym, tensor_anti, tensor_trace
-
+    return tensor_sym, tensor_anti, tensor_bulk
 
 
 def compute_eigenvalues(args : tuple):
@@ -210,9 +257,10 @@ def compute_eigenvalues(args : tuple):
     return index, eigvals
 
 
-def eigs_stretch_tensor(vector_field    : np.ndarray,
-                        tensor_field    : np.ndarray,
-                        n_processes     : int = 4 ):
+def eigs_stretch_tensor(vector_field : np.ndarray,
+                        tensor_field : np.ndarray,
+                        n_processes  : int = 4,
+                        parallel     : bool = False):
     """
     Compute the stretch tensor of a tensor field along a given
     vector field (usually the magnetic field).
@@ -242,9 +290,9 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
         _type_: _description_
     
     """
-    
-    print(f"stretch_tensor: computing eigen values of local " + 
-          f"stretching tensor with {n_processes} processes")
+        
+    # the number of grid elements
+    N = vector_field.shape[1]       # assumes a cubic domain
     
     # symmetric component
     tensor_sym, _, _ = orthogonal_tensor_decomposition(tensor_field)
@@ -255,58 +303,109 @@ def eigs_stretch_tensor(vector_field    : np.ndarray,
     X_T = np.einsum("ij... -> ji ...",X)
     
     # Put stretching tensor into the TNB basis
-    trans_tensor_sym = np.einsum('ij..., jk..., kl... -> il...', 
+    trans_tensor_sym = np.einsum('ab...,bc...,cd... -> ad...', 
                                  X, 
                                  tensor_sym, 
                                  X_T)
     
     # Compute eigenvalues of the stretching tensor
+    if parallel:
+        print(f"stretch_tensor: computing eigen values of local " + 
+            f"stretching tensor with {n_processes} processes")
+        # Create shared memory for trans_tensor_sym
+        shm = shared_memory.SharedMemory(create=True, size=trans_tensor_sym.nbytes)
+        trans_tensor_sym_shared = np.ndarray(trans_tensor_sym.shape, dtype=trans_tensor_sym.dtype, buffer=shm.buf)
+        np.copyto(trans_tensor_sym_shared, trans_tensor_sym)  # Copy data to shared memory
+
+        # Assuming trans_tensor_sym has shape (3, 3, N, N, N)
+        N = trans_tensor_sym.shape[2]
+        indices = [(i, j, k) for i in range(N) for j in range(N) for k in range(N)]
+        
+        # Initialize an array to store the eigenvalues
+        eigenvalues = np.zeros((3, N, N, N))
+
+        # Prepare arguments for multiprocessing, including shared memory details
+        args = [(index, trans_tensor_sym.shape, trans_tensor_sym.dtype, shm.name) for index in indices]
+
+        # Use multiprocessing to compute eigenvalues in parallel
+        with Pool(processes=n_processes) as pool:
+            results = pool.map(compute_eigenvalues, args)
+
+        # Store the results in the eigenvalues array
+        for index, eigvals in results:
+            eigenvalues[(slice(None),) + index] = np.sort(eigvals)
+
+        # Clean up shared memory
+        shm.close()
+        shm.unlink()
+    else:
+        sorted_eigenvalues = np.zeros((3, N, N, N))
+        for x in range(N):
+            for y in range(N):
+                for z in range(N):
+                    # Extract the 3x3 matrix for this position
+                    matrix = trans_tensor_sym[:, :, x, y, z]
+
+                    # Compute and sort the eigenvalues
+                    eigenvalues = np.linalg.eigvalsh(matrix)
+                    sorted_eigenvalues[:, x, y, z] = np.sort(eigenvalues)
     
-   # Create shared memory for trans_tensor_sym
-    shm = shared_memory.SharedMemory(create=True, size=trans_tensor_sym.nbytes)
-    trans_tensor_sym_shared = np.ndarray(trans_tensor_sym.shape, dtype=trans_tensor_sym.dtype, buffer=shm.buf)
-    np.copyto(trans_tensor_sym_shared, trans_tensor_sym)  # Copy data to shared memory
+    return sorted_eigenvalues
 
-    # Assuming trans_tensor_sym has shape (3, 3, N, N, N)
-    N = trans_tensor_sym.shape[2]
-    indices = [(i, j, k) for i in range(N) for j in range(N) for k in range(N)]
-    
-    # Initialize an array to store the eigenvalues
-    eigenvalues = np.zeros((3, N, N, N))
+        # print("reshape one")
+        # reshaped_trans_sym_tensor = np.reshape(trans_tensor_sym,
+        #                                        (N**3,3,3))    
+        # print("eigvals")    
+        # eig_vals = np.linalg.eigvalsh(reshaped_trans_sym_tensor)
+        # print("reshape two")
+        # eig_vals = np.sort(eig_vals,axis=1)
+        # #eigenvalues = eig_vals.reshape(N,N,N,3).transpose(3,0,1,2)
+        # Iterate over each position in the (N, N, N) grid
 
-    # Prepare arguments for multiprocessing, including shared memory details
-    args = [(index, trans_tensor_sym.shape, trans_tensor_sym.dtype, shm.name) for index in indices]
-
-    # Use multiprocessing to compute eigenvalues in parallel
-    with Pool(processes=n_processes) as pool:
-        results = pool.map(compute_eigenvalues, args)
-
-    # Store the results in the eigenvalues array
-    for index, eigvals in results:
-        eigenvalues[(slice(None),) + index] = eigvals
-
-    # Clean up shared memory
-    shm.close()
-    shm.unlink()
-    
-    return eigenvalues
-
-
-def A_iA_j_tensor(vector_field : np.ndarray):
+def tensor_outer_product(vector_field_0 : np.ndarray,
+                         vector_field_1 : np.ndarray):
     """
-    Compute the A_iA_j tensor of a vector field.
+    Compute the A_iB_j tensor field from a vector field.
     
     Author: James Beattie
     
     Args:
-        args (_type_): 
+        vector_field_0 (np.ndarray): 3,N,N,N array of vector field, where 
+        3 is the vector component and N is the number of grid points in each 
+        direction
+        vector_field_1 (np.ndarray): 3,N,N,N array of vector field, where 
+        3 is the vector component and N is the number of grid points in each 
+        direction
 
     Returns:
-        _type_: _description_
+        A_i_B_j: the A_iB_j tensor field
     
     """
         
-    return np.einsum('i...,j...->ij...',vector_field,vector_field)
+    return np.einsum('i...,j...->ij...',vector_field_0,vector_field_1)
+
+
+def tensor_contraction(tensor_field_0 : np.ndarray,
+                       tensor_field_1 : np.ndarray):
+    """
+    Compute the A_iA_j tensor field from a vector field.
+    
+    Author: James Beattie
+    
+    Args:
+        tensor_field_0 (np.ndarray): (i,j),N,N,N array of tensor field, where 
+        (i,j) are the tensor components and N is the number of grid points in each 
+        direction
+        tensor_field_1 (np.ndarray): (i,j),N,N,N array of tensor field, where 
+        (i,j) are the tensor components and N is the number of grid points in each 
+        direction
+
+    Returns:
+        A_i_A_jB_i_B_j : the A_i_A_jB_i_B_j contraction scalar field.
+    
+    """
+        
+    return np.einsum('ij...,ij...->...',tensor_field_0,tensor_field_1)
 
 
 def helmholtz_decomposition(vector_field : np.ndarray,
@@ -324,6 +423,7 @@ def helmholtz_decomposition(vector_field : np.ndarray,
     
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
+    # TODO: change the shape of F to be (3, N, N, N) instead of (N, N, N, 3) (consistent with other functions)
     
     shape = vector_field.shape[:-1]
     x     = np.linspace(-0.5,0.5,vector_field.shape[0]) # assuming a domian of [-L/2, L/2]
@@ -501,11 +601,8 @@ def vector_dot_product(vector1 : np.ndarray,
         _type_: _description_
     
     """
-    scalar = np.sum([
-        v1_comp * v2_comp
-        for v1_comp, v2_comp in zip(vector1, vector2)
-    ], axis=0)
-    return scalar
+    
+    return np.einsum("i...,i...->...",vector1,vector2)
 
 
 def field_magnitude(vector_field : np.ndarray):
@@ -588,9 +685,15 @@ def compute_TNB_basis(vector_field : np.ndarray):
     ])
     ## ---- COMPUTE NORMAL BASIS
     ## f_i df_j/dx_i
-    n_basis_term1 = np.einsum("ixyz,jixyz->jxyz", vector_field, gradient_tensor)
+    n_basis_term1 = np.einsum("i...,ji...->j...", 
+                              vector_field, 
+                              gradient_tensor)
     ## f_i f_j f_m df_m/dx_i
-    n_basis_term2 = np.einsum("ixyz,jxyz,mxyz,mixyz->jxyz", vector_field, vector_field, vector_field, gradient_tensor)
+    n_basis_term2 = np.einsum("i...,j...,m...,mi...->j...", 
+                              vector_field, 
+                              vector_field, 
+                              vector_field, 
+                              gradient_tensor)
     ## (f_i df_j/dx_i) / (f_k f_k) - (f_i f_j f_m df_m/dx_i) / (f_k f_k)^2
     n_basis = n_basis_term1 / field_magn**2 - n_basis_term2 / field_magn**4
     ## field curvature
@@ -634,7 +737,9 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                                     traceless       : bool = True ):
     """
     Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the 
-    TNB coordinate system.
+    TNB coordinate system of an underlying vector field.
+    
+    See: https://arxiv.org/pdf/2312.15589.pdf
     
     Author: James Beattie
     
@@ -650,6 +755,8 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                   J_3       : np.ndarray):
         """
         Compute the angle between the eigenvectors of the Jacobian.
+        
+        See: https://arxiv.org/pdf/2312.15589.pdf
         
         Author: James Beattie
         
@@ -671,23 +778,23 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     
     # Compute jacobian of B field
     jacobian = gradient_tensor(vector_field,
-                               order=4)
+                               order=6)
     
     # Make jacobian traceless (numerical errors will result in some trace, which is
     # equivalent to div(B) modes)
     if traceless:   
-        jacobian = jacobian - (1/3) * np.einsum("xyz, ...i",
-                                                np.einsum("iixyz",
+        jacobian = jacobian - (1/3) * np.einsum("..., ij... -> ij...",
+                                                np.einsum("ii...",
                                                         jacobian),
                                                 np.eye(3))
     
     # Compute TNB basis
     t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
     X   = np.array([b_basis,n_basis,t_basis])
-    X_T = np.einsum("ijxyz->jixyz",X)
+    X_T = np.einsum("ij...->ji...",X)
     
     # Put jacobian into the TNB basis
-    trans_jacobian = np.einsum('ab...,bc...,dc... -> adxyz', 
+    trans_jacobian = np.einsum('ab...,bc...,cd... -> ad...', 
                                X, 
                                jacobian, 
                                X_T)
@@ -701,13 +808,14 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                      [M_21, M_22]])
     
     # Compute trace and determinant of M
-    trace_M = np.einsum("iixyz",M)
+    trace_M = np.einsum("ii...",M)
     det_M   = M_11 * M_22 - M_12 * M_21
     
     # Characteristic equation
     D = 4 * det_M - trace_M**2
     
     # J values for openning angles of X and O point
+    # (there physicall are currents)
     J_3         = M_21 - M_12
     J_thresh    = np.sqrt( (M_11 - M_22)**2 + (M_12 + M_21)**2 )
     
@@ -715,8 +823,93 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     eig_1 = 0.5 * ( trace_M + np.sqrt( - (D + 0j)))
     eig_2 = 0.5 * ( trace_M - np.sqrt( - (D + 0j)))
     
-    return trace_M, D, eig_1, eig_2, theta_eig(J_thresh,J_3)
+    return trace_M, D, eig_1, eig_2, J_3, J_thresh, theta_eig(J_thresh,J_3)
 
+def classification_of_critical_points(trace_M       : np.ndarray,
+                                        D           : np.ndarray,
+                                        J_3         : np.ndarray,
+                                        J_thresh    : np.ndarray,
+                                        eig_1       : np.ndarray,
+                                        eig_2       : np.ndarray):
+        """
+        Classify the critical points of the 2D reduced Jacobian of the B field.
+    
+        See: https://arxiv.org/pdf/2312.15589.pdf
+        
+        Args:
+            trace_M (np.ndarray):   trace of the 2D reduced Jacobian of the B field
+            D (np.ndarray):         determinant of the 2D reduced Jacobian of the B field
+            J_3 (np.ndarray):       J_3 value of the 2D reduced Jacobian of the B field
+            J_thresh (np.ndarray):  J threshold value of the 2D reduced Jacobian of the B field
+            eig_1 (np.ndarray):     eigen value 1 of the 2D reduced Jacobian of the B field
+            eig_2 (np.ndarray):     eigen value 2 of the 2D reduced Jacobian of the B field
+            
+        Returns:
+            classification_array (np.ndarray): 3D array of the critical point types
+        """
+        
+        is_3D = np.abs(trace_M) > 0.0
+        is_2D = np.isclose(trace_M,0.0)
+        is_real_eig = np.abs(J_3) < J_thresh
+        is_imag_eig = np.abs(J_3) > J_thresh
+        is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
+            
+        # real and imaginary components of the eigenvalues
+        eig1_real = np.real(eig_1)
+        eig2_real = np.real(eig_2)
+        
+        # array initialisation to store each of the 9 critical point types
+        classification_array = np.repeat(np.zeros_like(trace_M)[np.newaxis,...],
+                                         9,
+                                         axis=0)
+        
+        # 3D X point (trace > 0, determinant < 0, real eigenvalues less than 0)
+        classification_array[0,...] = np.logical_and.reduce([is_3D, 
+                                                             is_real_eig, 
+                                                             eig1_real*eig2_real < 0.0])
+        
+        # 3D O point (repelling; trace > 0, determinant > 0, conjugate eigenvalues equal)
+        classification_array[1,...] = np.logical_and.reduce([is_3D, 
+                                                             is_imag_eig, 
+                                                             trace_M > 0.0])
+        
+        # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
+        classification_array[1,...] += np.logical_and.reduce([is_3D, 
+                                                              is_imag_eig, 
+                                                              trace_M < 0.0])
+        
+        # 3D repelling (trace =/= 0, determinant <= 0, real eigenvalues greater than 0)
+        classification_array[3,...] = np.logical_and.reduce([is_3D, 
+                                                             is_real_eig, 
+                                                             eig1_real > 0.0, 
+                                                             eig2_real > 0.0])
+                                                
+        # 3D attracting (trace =/= 0, determinant <= 0, real eigenvalues less than 0)
+        classification_array[4,...] = np.logical_and.reduce([is_3D, 
+                                                             is_real_eig, 
+                                                             eig1_real < 0.0, 
+                                                             eig2_real < 0.0])
+        
+        # 3D antiparallel (trace =/= 0, determinant < 0, either real component of eigenvalues = 0)
+        classification_array[5,...] = np.logical_and.reduce([is_3D, 
+                                                             is_parallel])
+        
+        # 2D X point (trace = 0, determinant < 0, real component of eigenvalues equal in opposite sign)
+        classification_array[6,...] = np.logical_and.reduce([is_2D, 
+                                                             is_real_eig])
+        
+        # 2D O point (trace = 0, determinant > 0, imaginary component of eigenvalues equal in opposite sign)
+        classification_array[7,...] = np.logical_and.reduce([is_2D, 
+                                                             is_imag_eig])
+        
+        # 2D antiparallel (trace = 0, determinant = 0, all eigenvalues = 0)
+        classification_array[8,...] = np.logical_and.reduce([is_2D, 
+                                                             is_parallel])
+        
+        return classification_array
+    
+        
+        
 
 ################################################################
 ## Derivative stencil functions 
