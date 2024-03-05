@@ -25,7 +25,7 @@ def extract_shell_X(vector_field: np.ndarray,
                               k_minus_dk:   float,
                               k_plus_dk:    float,
                               L: float = 1.0, 
-                              filter_type = 'parallel'):    # The physical size of the domain
+                              filter_type : str = 'parallel'):    # The physical size of the domain
 
     """ 
     
@@ -36,7 +36,7 @@ def extract_shell_X(vector_field: np.ndarray,
     https://github.com/pgrete/energy-transfer-analysis
     
     
-    Author: James Beattie
+    Author: James Beattie & Anne Noer Kolborg
         
     """
 
