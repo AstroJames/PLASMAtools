@@ -4,7 +4,7 @@
     Date: 09/07/2017
     Description: Functions for calculating fourier variables in the read_flash classes
 
-
+    Collaborators: Anne Noer Kolborg
 """
 
 ## ###############################################################
