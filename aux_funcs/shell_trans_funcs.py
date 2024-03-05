@@ -1,3 +1,11 @@
+"""
+    Title: Shell transfer functions 
+    Authors: James Beattie & Anne Noer Kolborg
+
+    Notes: Only kinetic at the moment. 
+"""
+
+
 import numpy as np 
 import os 
 from scipy.fft import fftfreq, fftn, ifftn 
