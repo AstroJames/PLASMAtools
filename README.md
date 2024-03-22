@@ -26,6 +26,7 @@ Some of the functions are:
 * vectof field RMS
 * scalar gradient
 * TNB basis
+* curvature
 * coordinate transformation into TNB basis
 * jacobian stability analysis in the TNB basis
 * classification of critical points
