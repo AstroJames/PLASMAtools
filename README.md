@@ -1,4 +1,4 @@
-# Python tools for reading and manipulating numerical fluid and partile data
+# Python tools for reading and manipulating plasma fluid simulations
 
 Utilises some MP parallelisation, and lots of vectorisation through the numpy library. 
 
