@@ -7,30 +7,43 @@ from h5py import File
 import numpy as np
 import numpy.polynomial.polynomial as poly
 import timeit
-from .aux_funcs import derived_var_funcs as dvf
+from ..aux_funcs import derived_var_funcs as dvf
 import pandas as pd
-from tqdm import tqdm
 from joblib import Parallel, delayed
+import re
+
+## ###############################################################
+## Auxillary reading functions (can be jit compiled)
+## ###############################################################
+
+from .read_FLASH    import  reformat_FLASH_field
+from .read_BHAC     import  reformat_BHAC_field
+from .read_RAMSES   import  reformat_RAMSES_field
 
 ## ###############################################################
 ## Global variabes
 ## ###############################################################
 
 field_lookup_type = {
-    "dens": "scalar",
-    "dvvl": "scalar",
-    "alpha": "scalar",
-    "vel" : "vector",
-    "mag" : "vector",
-    "tens": "vector",
-    "vort": "vector",
-    "mpr" : "vector",
-    "tprs": "vector",
-    "cur" : "vector",
-    "vxb" : "vector",
-    "mXc" : "vector",
-    "mXc_mag": "scalar"
+    "dens"      : "scalar",
+    "dvvl"      : "scalar",
+    "alpha"     : "scalar",
+    "vel"       : "vector",
+    "mag"       : "vector",
+    "tens"      : "vector",
+    "vort"      : "vector",
+    "mpr"       : "vector",
+    "tprs"      : "vector",
+    "cur"       : "vector",
+    "vxb"       : "vector",
+    "jxb"       : "vector",
+    "jxb_mag"   : "scalar",
+    "jdotb"     : "scalar"
 }
+
+bhac_lookup_dict = {"vel"  : ["u1", "u2", "u3"],
+                    "mag"  : ["b1", "b2", "b3"],
+                    "dens" : ["rho"]}
 
 ## ###############################################################
 ## Classes
@@ -148,8 +161,9 @@ class Particles:
 class Fields():
 
     def __init__(self,
-                 filename: str,
-                 reformat: bool = False) -> None:
+                 filename         : str,
+                 reformat         : bool = False,
+                 sim_data_type    : str = "flash") -> None:
         """
         Initialize a FLASHGridData object by reading in the data from the specified file.
 
@@ -160,6 +174,8 @@ class Fields():
         reformat : bool, optional
             Whether to reformat the data in the file into 3D arrays (True) or keep it in 1D arrays (False).
             Default is False.
+        sim_data_type : str, optional
+            The type of simulation data to read in. Default is "flash".
 
         Attributes
         ----------
@@ -221,6 +237,7 @@ class Fields():
         # simulation attributes
         self.filename           = filename
         self.reformat           = reformat
+        self.sim_data_type      = sim_data_type 
         self.n_cores            = 0
         self.nxb                = 0
         self.nyb                = 0
@@ -231,8 +248,9 @@ class Fields():
         self.logic_properties   = {} 
 
         # read in the simulation properties
-        self.__read_sim_properties()  
-        self.__read_sim_cells() 
+        if self.sim_data_type == "flash":
+            self.__read_sim_properties()  
+            self.__read_sim_cells() 
 
         # grid data attributes
         # if the data is going to be reformated, preallocate the 3D
@@ -269,6 +287,20 @@ class Fields():
         self.mXcy               = init_field
         self.mXcz               = init_field
         self.mXc_mag            = init_field
+        
+        # read in state (read in true or false if the reader
+        # has actually been called -- this is all to save time 
+        # with derived vars. Note that the way that it is 
+        # written means that it will create new read_... state variables
+        # even if one hasn't been initialised here.)
+        self.read_dens          = False
+        self.read_vel           = False
+        self.read_mag           = False  
+        self.derived_cur        = False
+        
+        # use a CGS unit system
+        self.mu0                = 4 * np.pi 
+
 
     def __read_sim_cells(self) -> None:
         """
@@ -283,6 +315,7 @@ class Fields():
         #print(f"Number of cells: {self.n_cells}")
         g.close()
 
+
     def __read_sim_properties(self) -> None:
         """
         This function reads in the FLASH field properties.
@@ -293,6 +326,7 @@ class Fields():
         self.logic_properties   = {str(key).split("'")[1].strip(): value for key, value in g["logical runtime parameters"]}
         g.close()
 
+
     def set_reformat(self,
                      reformat: bool) -> None:
         """
@@ -300,91 +334,134 @@ class Fields():
         """
         self.reformat = reformat
         
+        
     def reformat_error(self,
                        var: str) -> None:
         Error(f"Cannot compute {var} without reformating the data.")
     
-
+    
     def read(self,
-             field_str: str,
-             vector_magnitude: bool = False,
-             debug: bool = False) -> None:
+             field_str          : str,
+             vector_magnitude   : bool = False,
+             debug              : bool = False,
+             N_grid_x           : int  = 256,
+             N_grid_y           : int  = 256) -> None:
         """
-        This function reads in the FLASH grid data
+        This function reads in the grid data
         """
-
-        if field_lookup_type[field_str] == "scalar":
-            g = File(self.filename, 'r')
-            print(f"Reading in grid attribute: {field_str}")
-            if self.reformat:
-                print(f"Reading in reformatted grid attribute: {field_str}")
-                setattr(self, field_str, 
-                        reformat_FLASH_field(g[field_str][:,:,:,:],
-                                            self.nxb,
-                                            self.nyb,
-                                            self.nzb,
-                                            self.int_properties["iprocs"],
-                                            self.int_properties["jprocs"],
-                                            self.int_properties["kprocs"],
-                                            debug))
-            else:
-                setattr(self, field_str, g[field_str][:,:,:,:])
-            g.close()
         
-        elif field_lookup_type[field_str] == "vector":
-            g = File(self.filename, 'r')
-            for coord in ["x","y","z"]:
-                print(f"Reading in grid attribute: {field_str}{coord}")
+        setattr(self,f"read_{field_str}",True)
+        
+        if self.sim_data_type == "flash":     
+            # setting the read in states here (this adds an attribute)
+            if field_lookup_type[field_str] == "scalar":
+                g = File(self.filename, 'r')
+                print(f"Reading in grid attribute: {field_str}")
                 if self.reformat:
-                    #time1 = timeit.default_timer()
-                    field_var = reformat_FLASH_field(g[f"{field_str}{coord}"][:,:,:,:],
-                                                    self.nxb,
-                                                    self.nyb,
-                                                    self.nzb,
-                                                    self.int_properties["iprocs"],
-                                                    self.int_properties["jprocs"],
-                                                    self.int_properties["kprocs"],
-                                                    debug)
-                    print(f"Reading in reformatted grid attribute: {field_str}{coord}")
-                    #time2 = timeit.default_timer()
-                    #print(f"The total time it took is: {time2-time1}")
-                    if vector_magnitude: # if the mag is required, add and accumulate the square of the components
-                        if coord == "x":
-                            field_mag = field_var**2
-                        else:
-                            field_mag += field_var**2
-                    else:
-                        setattr(self, f"{field_str}{coord}",field_var)
+                    print(f"Reading in reformatted grid attribute: {field_str}")
+                    setattr(self, field_str, 
+                            reformat_FLASH_field(g[field_str][:,:,:,:],
+                                                 self.nxb,
+                                                 self.nyb,
+                                                 self.nzb,
+                                                 self.int_properties["iprocs"],
+                                                 self.int_properties["jprocs"],
+                                                 self.int_properties["kprocs"],
+                                                 debug))
                 else:
-                    if vector_magnitude:
-                        if coord == "x":
-                            field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
-                        else:
-                            field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2
-                    else:
-                        setattr(self, f"{field_str}{coord}", g[f"{field_str}{coord}"][:,:,:,:])
-            if vector_magnitude:
-                setattr(self, f"{field_str}_mag", np.sqrt(field_mag))
+                    setattr(self, field_str, g[field_str][:,:,:,:])
+                g.close()
             
-            g.close()
+            elif field_lookup_type[field_str] == "vector":
+                g = File(self.filename, 'r')
+                for coord in ["x","y","z"]:
+                    print(f"Reading in grid attribute: {field_str}{coord}")
+                    if self.reformat:
+                        #time1 = timeit.default_timer()
+                        field_var = reformat_FLASH_field(g[f"{field_str}{coord}"][:,:,:,:],
+                                                         self.nxb,
+                                                         self.nyb,
+                                                         self.nzb,
+                                                         self.int_properties["iprocs"],
+                                                         self.int_properties["jprocs"],
+                                                         self.int_properties["kprocs"],
+                                                         debug)
+                        print(f"Reading in reformatted grid attribute: {field_str}{coord}")
+                        #time2 = timeit.default_timer()
+                        #print(f"The total time it took is: {time2-time1}")
+                        if vector_magnitude: # if the mag is required, add and accumulate the square of the components
+                            if coord == "x":
+                                field_mag = field_var**2
+                            else:
+                                field_mag += field_var**2
+                        else:
+                            setattr(self, f"{field_str}{coord}",field_var)
+                    else:
+                        if vector_magnitude:
+                            if coord == "x":
+                                field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
+                            else:
+                                field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2
+                        else:
+                            setattr(self, f"{field_str}{coord}", g[f"{field_str}{coord}"][:,:,:,:])
+                if vector_magnitude:
+                    setattr(self, f"{field_str}_mag", np.sqrt(field_mag))
+                g.close()
+                
+        elif self.sim_data_type == "bhac":
+            
+            # now instantiate the bhac object
+            d = reformat_BHAC_field(file=self.filename)
+            
+            # read in coordinates
+            if field_lookup_type[field_str] == "scalar":
+                 for var in bhac_lookup_dict[field_str]:
+                    setattr(self, field_str, d.get_uniform_grid(varname=var,
+                                                        N_grid_x=N_grid_x,
+                                                        N_grid_y=N_grid_y))               
+            elif field_lookup_type[field_str] == "vector":
+                for var, coord in zip(bhac_lookup_dict[field_str],["x","y","z"]):
+                    setattr(self, field_str + coord, d.get_uniform_grid(varname=var,
+                                                        N_grid_x=N_grid_x,
+                                                        N_grid_y=N_grid_y))
+               
+            # clean up after creating the object (not sure if this is required) 
+            del d
+
+            
             
     def derived_var(self,
                     field_str: str,
                     eta: float      = 0.0,
                     nu: float       = 0.0,
                     n_workers: int  = 1) -> None:
+        """
+        General function for adding derived variables to the data object.
         
+        
+        
+        """
+        
+        # this is a pre-defined table for common derived vars
+        # any new commonly used variables should be added here 
+        # so you can just call them with .derived_var("E"), etc.
         var_lookup_table = {
-            "E": ["Ex","Ey","Ez"],
-            "ExB": ["ExBx","ExBy","ExBz"],
-            "VxB": ["VxBx","VxBy","VxBz"],
-            "jacobian_mag": ["eig_1","eig_2","eig_3"],
-            "helmholtz": ["vel_comx","vel_comy","vel_comz",
-                          "vel_solx","vel_soly","vel_solz"],
-            "cur" : ["curx","cury","curz"],
-            "mXc" : ["mXcx","mXcy","mXcz"],
-            "lorentz" : ["lorx","lory","lorz"]
+            "E"            : ["Ex","Ey","Ez"],                   # electric field
+            "Exb"          : ["Exbx","Exby","Exbz"],             # reconnection inflow velocity
+            "uxb"          : ["uxbx","uxby","uxbz"],             # induction
+            "helmholtz"    : ["vel_comx","vel_comy","vel_comz",  # helmholtz decomp.
+                              "vel_solx","vel_soly","vel_solz"], # 
+            "cur"          : ["curx","cury","curz"],             # current
+            "jxb"          : ["jxbx","jxby","jxbz"],             # lorentz force
+            "jdotb"        : ["jdotb"],                          # current dot magnetic field 
+            "tens"         : ["tensx","tensy","tensz"]           # magnetic tension
         }
+
+        # throw an error if the derived var doesn't exist
+        print(field_str)
+        if field_str not in var_lookup_table:
+            raise Exception(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
+
         
         print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
         # grid data attributes
@@ -398,242 +475,183 @@ class Fields():
             # otherwise, preallocate the 1D arrays for the grid data
             init_field = np.zeros(self.n_cells, dtype=np.float32)
         
-        print(field_str)
-        if field_str not in var_lookup_table:
-            raise Exception(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
-        
+        # add the init field to the data object
         for field in var_lookup_table[field_str]:    
             setattr(self, field, init_field)
+        
+        ######################################################  
+        # Derived vars 
+        ######################################################
             
-        if field_str == "mXc":
-            if self.reformat:
-                self.read("mag")
-                if self.curx[0,0,0] == 0.0:
-                    self.derived_var("cur")
-                mXc = dvf.vectorCrossProduct([self.magx,
-                                              self.magy,
-                                              self.magz],
-                                             [(1/(4*np.pi))*self.curx,
-                                              (1/(4*np.pi))*self.cury,
-                                              (1/(4*np.pi))*self.curz])
-                # write the new variable to the object
-                for idx, coord in enumerate(["x","y,","z"]):
-                    setattr(self, f"mXc{coord}", mXc[idx])          
-            else:
-                self.reformat_error(field_str)
-        if field_str == "lorentz":
-            if self.reformat:
-                self.read("mag")
-                self.derived_var("cur")
-                lor = dvf.vectorCrossProduct([(1/(4*np.pi))*self.curx,
-                                              (1/(4*np.pi))*self.cury,
-                                              (1/(4*np.pi))*self.curz],
-                                             [self.magx,
-                                              self.magy,
-                                              self.magz]) 
-                # write the new variable to the object
-                for idx, coord in enumerate(["x","y,","z"]):
-                    setattr(self, f"lor{coord}", lor[idx])          
+        # Defn: the current density
+        # assuming \mu_0 = 4\pi for current
+        if field_str == "cur":
+            print(f"derived_var: Calculating current density.")
             
-        # Variable definitions
+            if not self.read_mag:
+                self.read("mag")
+                
+            cur = dvf.vector_curl([self.magx, self.magy, self.magz]) / (self.mu0)
+            
+            # write the new variable to the object
+            for idx, coord in enumerate(["x","y,","z"]):
+                setattr(self, f"cur{coord}", cur[idx])  
+            
+            
+        # Defn: jxb (Lorentz force)
+        # assuming \mu_0 = 4\pi for current
+        if field_str == "jxb":
+            print(f"derived_var: Calculating Lorentz force.")
+            
+            # make sure these fields have been read in
+            if not self.read_mag:
+                self.read("mag")
+            if not self.derived_cur:
+                self.derived_var("cur")       
+                                         
+            jxb = dvf.vectorCrossProduct([self.curx,
+                                            self.cury,
+                                            self.curz],
+                                            [self.magx,
+                                            self.magy,
+                                            self.magz]) 
+            
+            # write the new variable to the object
+            for idx, coord in enumerate(["x","y,","z"]):
+                setattr(self, f"jxb{coord}", jxb[idx])       
+        
+        
+        # Defn: induction
+        if field_str == "uxb" or field_str == "E" or field_str == "ExB":
+            print("derived_var: Calculating the induction.")
+            
+            # make sure these fields have been read in
+            if not self.read_mag:
+                self.read("mag")
+            if not self.read_vel:
+                self.read("vel")   
+        
+            uxb = dvf.vector_cross_product([self.velx,
+                                            self.vely,
+                                            self.velz],
+                                           [self.magx,
+                                            self.magy,
+                                            self.magz])
+                  
+            if field_str == "uxb":
+                # write the new variable to the object
+                for idx, coord in enumerate(["x","y","z"]):
+                    setattr(self, f"uxb{coord}", uxb[idx])           
+
+            
+        # Defn: electric field (non ideal if \eta =/= 0)
+        # assuming \mu_0 = 4\pi for current
         if field_str == "E" or field_str == "ExB":
             print(f"derived_var: Calculating E field.")
-            
+
+            # make sure these fields have been read in
+            if not self.read_vel:
+                self.read("vel")
+            if not self.read_mag:
+                self.read("mag")
+            if not self.derived_cur:
+                self.derived_var("cur")    
+                
             if eta == 0.0:
-                Warning(f"derived_var: eta is 0.0. E fields will not include current.")
+                Warning(f"derived_var: eta is 0.0. Only ideal E field will be computed.")
             
-            # read in the grid data
-            self.read("vel")
-            self.read("mag")
-            if eta != 0.0:
-                try:
-                    self.read("cur")
-                except:
-                    Warning(f"derived_var: current does not exist, deriving it")
-                    self.derived_var("cur")
+            # calculate the new variable (non-ideal electric field)
+            E = eta * np.array([self.curx,self.cury,self.curz]) - uxb 
+
+            if field_str == "E":
+                # write the new variable to the object
+                for idx, coord in enumerate(["x","y","z"]):
+                    setattr(self, f"E{coord}", E[idx])  
             
-            # calculate the new variable
-            Ex = eta*self.curx/(4*np.pi) - (self.vely*self.magz - self.velz*self.magy) 
-            Ey = eta*self.cury/(4*np.pi) - (self.velz*self.magx - self.velx*self.magz) 
-            Ez = eta*self.curz/(4*np.pi) - (self.velx*self.magy - self.vely*self.magx) 
+
+        # Defn: the electric field cross the magnetic field for computing 
+        # inflow velocities for reconnection problems.5
+        if field_str == "Exb":
+            print(f"derived_var: Calculating Exb field.")
+            
+            # make sure these fields have been read in
+            if not self.read_mag:
+                self.read("mag")
+            
+            Exb = dvf.vector_cross_product(E,
+                                           [self.magx,self.magy,self.magz])
             
             # write the new variable to the object
-            setattr(self, "Ex", Ex)
-            setattr(self, "Ey", Ey)
-            setattr(self, "Ez", Ez)
+            for idx, coord in enumerate(["x","y","z"]):
+                setattr(self, f"Exb{coord}", Exb[idx])  
             
-        if field_str == "VxB":
-            """
-            the velocity field cross the magnetic field.
-            
-            """
-            
-            self.read("vel")
-            self.read("mag")
         
-            VxBx = self.vely*self.magz - self.velz*self.magy
-            VxBy = self.velz*self.magx - self.velx*self.magz
-            VxBz = self.velx*self.magy - self.vely*self.magx
-            
-            # write the new variable to the object
-            setattr(self, "VxBx", VxBx)
-            setattr(self, "VxBy", VxBy)
-            setattr(self, "VxBz", VxBz)
-            
-        if field_str == "ExB":
-            """
-            the electric field cross magnetic field.
-            
-            """
-            
-            ExBx = self.Ey*self.magz - self.Ez*self.magy
-            ExBy = self.Ez*self.magx - self.Ex*self.magz
-            ExBz = self.Ex*self.magy - self.Ey*self.magx
-            
-            # write the new variable to the object
-            setattr(self, "ExBx", ExBx)
-            setattr(self, "ExBy", ExBy)
-            setattr(self, "ExBz", ExBz)
-            
-        if field_str == "jacobian_mag":
-            """
-            Compute the Jacobian of the magnetic field and its eigenvalues.
-            
-            """
-            
-            if self.reformat:            
-                self.read("mag")
-                
-                # assume that the box is cubic with the same dx, dy, dz
-                two_dX = 2.0/self.magx.shape[0]
-                two_dY = two_dX
-                two_dZ = two_dX
-                
-                print("derived_var: Calculating the Jacobian of the magnetic field.")
-                
-                # x components
-                dBx_dx = (np.roll(self.magx, -1, axis=0) - np.roll(self.magx, 1, axis=0))/two_dX
-                dBx_dy = (np.roll(self.magx, -1, axis=1) - np.roll(self.magx, 1, axis=1))/two_dY
-                dBx_dz = (np.roll(self.magx, -1, axis=2) - np.roll(self.magx, 1, axis=2))/two_dZ
-                
-                # y components
-                dBy_dx = (np.roll(self.magy, -1, axis=0) - np.roll(self.magy, 1, axis=0))/two_dX
-                dBy_dy = (np.roll(self.magy, -1, axis=1) - np.roll(self.magy, 1, axis=1))/two_dY
-                dBy_dz = (np.roll(self.magy, -1, axis=2) - np.roll(self.magy, 1, axis=2))/two_dZ
-                
-                # z components
-                dBz_dx = (np.roll(self.magz, -1, axis=0) - np.roll(self.magz, 1, axis=0))/two_dX
-                dBz_dy = (np.roll(self.magz, -1, axis=1) - np.roll(self.magz, 1, axis=1))/two_dY
-                dBz_dz = (np.roll(self.magz, -1, axis=2) - np.roll(self.magz, 1, axis=2))/two_dZ
-                
-                # Jacobian
-                Jacobian = np.zeros((self.magx.shape[0], 
-                                    self.magx.shape[1], 
-                                    self.magx.shape[2], 3, 3))
-                
-                Jacobian[..., 0, 0] = dBx_dx
-                Jacobian[..., 0, 1] = dBx_dy
-                Jacobian[..., 0, 2] = dBx_dz
-                Jacobian[..., 1, 0] = dBy_dx
-                Jacobian[..., 1, 1] = dBy_dy
-                Jacobian[..., 1, 2] = dBy_dz
-                Jacobian[..., 2, 0] = dBz_dx
-                Jacobian[..., 2, 1] = dBz_dy
-                Jacobian[..., 2, 2] = dBz_dz
-                
-                print("derived_var: Jacobian of the magnetic field calculated.")
-            
-                # Calculate the eigenvalues of the Jacobian without looping
-
-                # Compute the coefficients for the characteristic equation
-                """
-                lamba^3 - Tr(J)lambda^2 + ( Tr(J^2) /2 - Tr(J)^2/2 )lamba - Det(J) = 0
-                
-                """
-                
-                print("derived_var: Calculating the eigenvalues of the Jacobian via characteristic equation.")
-                
-                trace_A = np.trace(Jacobian, axis1=-2, axis2=-1)
-                det_A = np.linalg.det(Jacobian)
-                trace_A_sq = trace_A ** 2
-                trace_A2 = np.einsum('...ii->...',np.matmul(Jacobian, Jacobian))
-
-                # Cubic coefficients
-                a = -trace_A
-                b = (trace_A2 - trace_A_sq) / 2
-                c = -det_A
-
-                print("derived_var: Characteristic equation calculated.")
-
-                # Calculate eigenvalues using numpy's roots function for a cubic equation
-                coefficients = np.stack([np.ones(np.shape(a)), a, b, c], axis=-1)
-                
-                # Reshape coefficients for a flattened spatial dimension
-                coefficients_reshaped = coefficients.reshape(-1, 4)
-                
-                print("derived_var: Calculating the eigenvalues of the Jacobian.")
-                
-                # Progress bar setup
-                #pbar = tqdm(total=coefficients_reshaped.shape[0], desc="Computing roots")
-                
-                # define progress bar update
-                def roots_with_progress(i):
-                    return poly.polyroots(coefficients_reshaped[i])
-                
-                #eigenvalues = np.apply_along_axis(roots_with_progress, 1, coefficients_reshaped)
-                #eigenvalues = Parallel(n_jobs=n_workers)(delayed(roots_with_progress)(i) for i in range(coefficients_reshaped.shape[0]))
-                #eigenvalues = np.array(eigenvalues)
-                
-                # Close the progress bar
-                #pbar.close()
-                
-                print("derived_var: Eigenvalues of the Jacobian calculated.")
-            
-                #eigenvalues = eigenvalues.reshape(*np.shape(a), 3)
-            
-                # eigenvalues
-                setattr(self, "eig_1", a)#eigenvalues[...,0])
-                setattr(self, "eig_2", b)#eigenvalues[...,1])
-                setattr(self, "eig_3", c)#eigenvalues[...,2])
-            else:
-                self.reformat_error(field_str)
-                
-        if field_str == "cur":
-            
-            if self.reformat:
-                self.read("mag")
-                cur = dvf.curl([self.magx, self.magy, self.magz])
-                setattr(self, "curx", cur[0])
-                setattr(self, "cury", cur[1])
-                setattr(self, "curz", cur[2])
-            else:
-                self.reformat_error(field_str)
-                
-        if field_str == "bj_angle":
-            if self.curx[0,0,0] == 0.0:
-                self.derived_var("cur")
-            
-            if self.reformat:
-                self.read("mag")
-                
-                # add definition here
-                
-            else:
-                self.reformat_error(field_str)
-            
-            
+        # Defn: the helmholtz decomposition of the velocity field                                    
         if field_str == "helmholtz":
-            self.read("vel")
+            print(f"derived_var: Calculating Helmholtz decomp of v.")
+
+            # make sure these fields have been read in
+            if not self.read_vel:
+                self.read("vel")
             
+            # initialize the velocity cube
             vel_cube = np.zeros((self.velx.shape[0],self.velx.shape[1],self.velx.shape[2],3))
+            
+            # add to the cube (note that this is a 4D array, with component
+            # in the last dimension -- inconsistent with the rest of the tools)
             vel_cube[..., 0] = self.velx
             vel_cube[..., 1] = self.vely
             vel_cube[..., 2] = self.velz 
+            
+            # calculate the helmholtz decomposition
             F_irrot, F_solen = dvf.helmholtz_decomposition(vel_cube,n_workers)
             
+            # write the new variable to the object
             for idx, coords in enumerate(["x", "y", "z"]):
                 setattr(self, f"vel_comp{coords}", F_irrot[..., idx])
                 setattr(self, f"vel_sol{coords}", F_solen[..., idx])
+                
+        
+        # Defn: the magnetic tension field
+        if field_str == "tens":
+            print(f"derived_var: Calculating magnetic tension field.")
+            
+            # make sure these fields have been read in
+            if not self.read_mag:
+                self.read("mag")
+                
+            # define the magnetic tension field
+            tens = np.einsum("i...,ij...->j...",
+                             np.array[self.magx,self.magy,self.magz],
+                             dvf.gradient_tensor(np.array[self.magx,self.magy,self.magz]))
+            
+            # write the new variable to the object
+            for idx, coord in enumerate(["x","y","z"]):
+                setattr(self, f"tens{coord}", tens[idx])
+    
+    
+        # Defn: the viscous dissipation
+        if field_str == "visc_diss":
+            print(f"derived_var: Calculating the dissipation rate.")
+            
+            # make sure these fields have been read in
+            if not self.read_mag:
+                self.read("vel")
+                
+            # define the magnetic tension field
+            sym, _, _ = dvf.orthogonal_tensor_decomposition(
+                dvf.gradient_tensor([self.velx,
+                                     self.vely,
+                                     self.velz])
+                )
+            
+            visc_diss = 2 * dvf.tensor_contraction(sym,sym)
+            
+            # write the new variable to the object
+            setattr(self, f"visc_diss", visc_diss)
+            
+            
+
     
 
 class PowerSpectra():
@@ -715,80 +733,3 @@ class PowerSpectra():
     
     def __compute_peak_scale(self):
         pass
-    
-        
-         
-## ###############################################################
-## Auxillary reading functions (can be jit compiled)
-## ###############################################################            
-    
-def reformat_FLASH_field(field  : np.ndarray,
-                         nxb    : int,
-                         nyb    : int,
-                         nzb    : int,
-                         iprocs : int,
-                         jprocs : int,
-                         kprocs : int,
-                         debug) -> np.ndarray:
-    """
-    This function reformats the FLASH block / core format into
-    (x,y,z) format for processing in real-space coordinates utilising
-    numba's jit compiler, producing roughly a two-orders of magnitude
-    speedup compared to the pure python version.
-
-    INPUTS:
-    field   - the FLASH field in (core,block_x,block_y,block_z) coordinates
-    iprocs  - the number of cores in the x-direction
-    jprocs  - the number of cores in the y-direction
-    kprocs  - the number of cores in the z-direction
-    debug   - flag to print debug information
-
-
-    OUTPUTs:
-    field_sorted - the organised 3D field in (x,y,z) coordinates
-
-    """
-
-    # The block counter for looping through blocks
-    block_counter: int = 0
-
-    if debug:
-        print(f"reformat_FLASH_field: nxb = {nxb}")
-        print(f"reformat_FLASH_field: nyb = {nyb}")
-        print(f"reformat_FLASH_field: nzb = {nzb}")
-        print(f"reformat_FLASH_field: iprocs = {iprocs}")
-        print(f"reformat_FLASH_field: jprocs = {jprocs}")
-        print(f"reformat_FLASH_field: kprocs = {kprocs}")
-
-    # Initialise an empty (x,y,z) field
-    # has to be the same dtype as input field (single precision)
-    field_sorted = np.zeros((nyb*jprocs,
-                             nzb*kprocs,
-                             nxb*iprocs),
-                             dtype=np.float32)
-
-
-    #time1 = timeit.default_timer()
-    
-    # Sort the unsorted field
-    if debug:
-        print("reformat_FLASH_field: Beginning to sort field.")
-    for j in range(jprocs):
-        for k in range(kprocs):
-            for i in range(iprocs):
-                field_sorted[j*nyb:(j+1)*nyb,
-                             k*nzb:(k+1)*nzb,
-                             i*nxb:(i+1)*nxb, 
-                             ] = field[block_counter, :, :, :]
-                block_counter += 1
-    
-    #time2 = timeit.default_timer()     
-    #print(f"The total time it took is: {time2-time1}")
-    
-    # swap axes to get the correct orientation
-    # x = 0, y = 1, z = 2
-    field_sorted = np.transpose(field_sorted, (2,1,0))
-    
-    if debug:
-        print("reformat_FLASH_field: Sorting complete.")
-    return field_sorted
