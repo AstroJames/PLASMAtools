@@ -95,8 +95,8 @@ def spherical_integrate(data: np.ndarray,
     return k_modes, radial_sum
 
 def cylindrical_integrate(data: np.ndarray, 
-                          bins_perp: int = None,
-                          bins_para:  int = None) -> tuple:
+                          bins_perp: int = 0,
+                          bins_para:  int = 0) -> tuple:
     """
     The cylindrical integrate function takes the 3D power spectrum and integrates
     over cylindrical shells of constant k in a plane, and then a 1D spectrum along
@@ -122,9 +122,9 @@ def cylindrical_integrate(data: np.ndarray,
     k_para  = np.abs(z - center[2])                             # Distance from the plane
 
     N = data.shape[0]
-    if not bins_perp:
+    if bins_perp == 0:
         bins_perp = N // 2
-    if not bins_para:
+    if bins_para == 0:
         bins_para = N // 2
 
     # initailize cylindrical sum

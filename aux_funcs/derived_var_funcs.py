@@ -12,10 +12,14 @@
 ## IMPORTS
 ## ###############################################################
 
-#import scipy.fft as fft
+# python dependencies
 import scipy.fft as fft
 import numpy as np
 from multiprocessing import Pool, shared_memory
+from scipy.ndimage import uniform_filter
+
+# import derivative stencils
+from .derivatives import *
 
 ## ###############################################################
 ## Derived Variable Functions
@@ -94,9 +98,9 @@ def vector_potential(vector_field   : np.ndarray,
     a_hat = 1j * vector_cross_product(k, vector_field_FFT) / k_norm**2
     
     # Take the inverse FFT to get the vector potential
-    a = fft.ifftn(a_hat, 
+    a = np.real(fft.ifftn(a_hat, 
                 axes=(1, 2, 3),
-                norm="forward").real
+                norm="forward"))
     
     # Take the curl of the vector potential to get the reconstructed magnetic field
     # for debuging
@@ -126,6 +130,7 @@ def magnetic_helicity(magnetic_vector_field : np.ndarray ):
     
     # compute the magnetic helicity    
     return vector_dot_product(a,magnetic_vector_field)
+
 
 def kinetic_helicity(velocity_vector_field : np.ndarray ):
     """
@@ -198,11 +203,27 @@ def gradient_tensor(vector_field    : np.ndarray,
     elif order == 6:
         grad_fun = gradient_order6
     
+    
     return np.einsum("ij...->ji...",
                      np.array([
                          [grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
                          [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
                          [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]))
+    
+    
+def smooth_gradient_tensor(gradient_tensor, smoothing_size=10):
+    """
+    Smooth a gradient tensor field by averaging over adjacent cells.
+
+    Args:
+        gradient_tensor (np.ndarray): The gradient tensor to smooth (shape: 3,3,N,N,N).
+        smoothing_size (int): The size of the smoothing window (default: 10).
+
+    Returns:
+        np.ndarray: The smoothed gradient tensor.
+    """
+
+    return uniform_filter(gradient_tensor, size=smoothing_size, axes=(-3, -2, -1), mode='nearest')
     
 
 def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
@@ -235,26 +256,50 @@ def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
     return tensor_sym, tensor_anti, tensor_bulk
 
 
-def compute_eigenvalues(args : tuple):
+def hermitian_eigenvalues(matrix : np.ndarray):
     """
-    Top-level function for computing eigenvalues
-
-    Author: James Beattie
-
-    Args:
-        args (_type_): 
-
-    Returns:
-        _type_: _description_
-    """
-    index, shape, dtype, shm_name = args
-    existing_shm = shared_memory.SharedMemory(name=shm_name)
-    trans_tensor_sym_shared = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
-    tensor_at_point = trans_tensor_sym_shared[..., index[0], index[1], index[2]]
-    eigvals = np.linalg.eigvalsh(tensor_at_point)
-    existing_shm.close()
+    Compute the eigenvalues and eigenvectors of a 
+    hermitian tensor based on analyical relations in: https://hal.science/hal-01501221/document
     
-    return index, eigvals
+    Author: James Beattie
+    
+    """
+    
+    def phi(x_2, x_1):
+        if x_2 > 0:
+            return np.arctan( np.sqrt( 4*x_1**3 - x_2**2 ) / x_2 )
+        elif x_2 == 0.0:
+            return np.pi/2
+        elif x_2 < 0:
+            return np.arctan( np.sqrt( 4*x_1**3 - x_2**2 ) / x_2 ) + np.pi
+        
+    # Read the matrix into variables
+    a = matrix[0,0]; b = matrix[1,1]; c = matrix[2,2]
+    d = matrix[1,0]; f = matrix[2,0]; e = matrix[2,1]
+    d_star = matrix[0,1]; f_star = matrix[0,2]; e_star = matrix[1,2]
+    
+    # x_1 and x_2 coefficients for eigen values
+    x_1 = a**2 + b**2 + c**2 - a*d - a*c - b*c + 3 * ( np.abs(d)**2 + np.abs(f)**2 + np.abs(e)**2 )
+    x_2 = -( 2*a - b - c ) * ( 2*b - a - c ) * ( 2*c - a - b ) +\
+            9 * (  (2*c - a - b)*np.abs(d)**2 + ( 2*b - a - c )*np.abs(f)**2 + ( 2*a - b - c )*np.abs(e)**2  ) -\
+            54 * np.real(d_star*e_star*f_star)
+                        
+    # eigen values
+    lambda_1 = ( a + b + c - 2 * np.sqrt(x_1) * np.cos( phi(x_2, x_1)/3.0 ) ) / 3.0
+    lambda_2 = ( a + b + c + 2 * np.sqrt(x_1) * np.cos( (phi(x_2, x_1) - np.pi ) /3.0 ) ) / 3.0
+    lambda_3 = ( a + b + c + 2 * np.sqrt(x_1) * np.cos( (phi(x_2, x_1) + np.pi ) /3.0 ) ) / 3.0        
+            
+    # m coefficients for eigen vectors
+    m_1 = ( d * ( c - lambda_1 ) - e_star * f) / ( f * ( b - lambda_1) - d*e )
+    m_2 = ( d * ( c - lambda_2 ) - e_star * f) / ( f * ( b - lambda_2) - d*e )
+    m_3 = ( d * ( c - lambda_3 ) - e_star * f) / ( f * ( b - lambda_3) - d*e )
+    
+    # eigen vectors
+    zeta_1 = np.array([( lambda_1 - c - e * m_1 )/f, m_1 , 1])
+    zeta_2 = np.array([( lambda_2 - c - e * m_2 )/f, m_2 , 1])
+    zeta_3 = np.array([( lambda_3 - c - e * m_3 )/f, m_3 , 1])
+    
+    return np.array([lambda_1, lambda_2, lambda_3]), zeta_1, zeta_2, zeta_3
 
 
 def eigs_stretch_tensor(vector_field : np.ndarray,
@@ -352,15 +397,6 @@ def eigs_stretch_tensor(vector_field : np.ndarray,
     
     return sorted_eigenvalues
 
-        # print("reshape one")
-        # reshaped_trans_sym_tensor = np.reshape(trans_tensor_sym,
-        #                                        (N**3,3,3))    
-        # print("eigvals")    
-        # eig_vals = np.linalg.eigvalsh(reshaped_trans_sym_tensor)
-        # print("reshape two")
-        # eig_vals = np.sort(eig_vals,axis=1)
-        # #eigenvalues = eig_vals.reshape(N,N,N,3).transpose(3,0,1,2)
-        # Iterate over each position in the (N, N, N) grid
 
 def tensor_outer_product(vector_field_0 : np.ndarray,
                          vector_field_1 : np.ndarray):
@@ -408,8 +444,7 @@ def tensor_contraction(tensor_field_0 : np.ndarray,
     return np.einsum('ij...,ij...->...',tensor_field_0,tensor_field_1)
 
 
-def helmholtz_decomposition(vector_field : np.ndarray,
-                            n_workers    : int = 1 ):
+def helmholtz_decomposition(vector_field : np.ndarray):
     """
     Compute the irrotational and solenoidal components of a vector field.
     
@@ -429,7 +464,7 @@ def helmholtz_decomposition(vector_field : np.ndarray,
     x     = np.linspace(-0.5,0.5,vector_field.shape[0]) # assuming a domian of [-L/2, L/2]
     
     # Fourier transform to Fourier space    
-    Fhat = fft.fftn(vector_field, axes=(0, 1, 2),norm = 'forward',workers=n_workers)
+    Fhat = fft.fftn(vector_field, axes=(0, 1, 2),norm = 'forward')
     
     Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
     Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
@@ -453,8 +488,8 @@ def helmholtz_decomposition(vector_field : np.ndarray,
     Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
     
     # Inverse Fourier transform to real space
-    F_irrot = fft.ifftn(Fhat_irrot, axes=(X,Y,Z),workers=n_workers,norm = 'forward').real
-    F_solen = fft.ifftn(Fhat_solen, axes=(X,Y,Z),workers=n_workers,norm = 'forward').real
+    F_irrot = fft.ifftn(Fhat_irrot, axes=(X,Y,Z),norm = 'forward').real
+    F_solen = fft.ifftn(Fhat_solen, axes=(X,Y,Z),norm = 'forward').real
     
     # Remove numerical noise
     # threshold = 1e-16
@@ -525,7 +560,6 @@ def vector_divergence(vector_field  : np.ndarray,
     elif order == 6:
         grad_fun = gradient_order6
     
-    # divergence
     dFx_dx = grad_fun(vector_field[X],gradient_dir=X)
     dFy_dy = grad_fun(vector_field[Y],gradient_dir=Y)
     dFz_dz = grad_fun(vector_field[Z],gradient_dir=Z)
@@ -619,7 +653,7 @@ def field_magnitude(vector_field : np.ndarray):
     
     """
     vector_field = np.array(vector_field)
-    return np.sqrt(np.sum(vector_field**2, axis=0))
+    return np.sqrt(np.einsum("i...,i...->...",vector_field,vector_field))
 
 
 def field_RMS(scalar_field : np.ndarray):
@@ -777,8 +811,8 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
         return np.arctan( np.sqrt(ratio**2-1) )
     
     # Compute jacobian of B field
-    jacobian = gradient_tensor(vector_field,
-                               order=6)
+    jacobian = smooth_gradient_tensor(gradient_tensor(vector_field,
+                               order=2))
     
     # Make jacobian traceless (numerical errors will result in some trace, which is
     # equivalent to div(B) modes)
@@ -788,22 +822,24 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                                                         jacobian),
                                                 np.eye(3))
     
-    # Compute TNB basis
-    t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
-    X   = np.array([b_basis,n_basis,t_basis])
-    X_T = np.einsum("ij...->ji...",X)
     
-    # Put jacobian into the TNB basis
-    trans_jacobian = np.einsum('ab...,bc...,cd... -> ad...', 
-                               X, 
-                               jacobian, 
-                               X_T)
+    
+    # # Compute TNB basis
+    # t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
+    # X   = np.array([b_basis,n_basis,t_basis])
+    # X_T = np.einsum("ij...->ji...",X)
+    
+    # # Put jacobian into the TNB basis
+    # trans_jacobian = np.einsum('ab...,bc...,cd... -> ad...', 
+    #                            X, 
+    #                            jacobian, 
+    #                            X_T)
     
     # Construct M, the 2D jacobian of the B_perp field
-    M_11 = trans_jacobian[0,0,...]
-    M_12 = trans_jacobian[0,1,...]
-    M_21 = trans_jacobian[1,0,...]
-    M_22 = trans_jacobian[1,1,...]
+    M_11 = jacobian[0,0,...]
+    M_12 = jacobian[0,1,...]
+    M_21 = jacobian[1,0,...]
+    M_22 = jacobian[1,1,...]
     M    = np.array([[M_11, M_12],
                      [M_21, M_22]])
     
@@ -815,7 +851,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     D = 4 * det_M - trace_M**2
     
     # J values for openning angles of X and O point
-    # (there physicall are currents)
+    # (these are physical currents)
     J_3         = M_21 - M_12
     J_thresh    = np.sqrt( (M_11 - M_22)**2 + (M_12 + M_21)**2 )
     
@@ -824,6 +860,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     eig_2 = 0.5 * ( trace_M - np.sqrt( - (D + 0j)))
     
     return trace_M, D, eig_1, eig_2, J_3, J_thresh, theta_eig(J_thresh,J_3)
+
 
 def classification_of_critical_points(trace_M       : np.ndarray,
                                         D           : np.ndarray,
@@ -874,7 +911,7 @@ def classification_of_critical_points(trace_M       : np.ndarray,
                                                              trace_M > 0.0])
         
         # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
-        classification_array[1,...] += np.logical_and.reduce([is_3D, 
+        classification_array[2,...] = np.logical_and.reduce([is_3D, 
                                                               is_imag_eig, 
                                                               trace_M < 0.0])
         
@@ -909,91 +946,4 @@ def classification_of_critical_points(trace_M       : np.ndarray,
         return classification_array
     
         
-        
-
-################################################################
-## Derivative stencil functions 
-################################################################
-
-
-def gradient_order2(scalar_field : np.ndarray, 
-                    gradient_dir : int, 
-                    L            : float = 1.0 ):
-    """
-    Compute the gradient of a scalar field in one direction
-    using a two point stencil (second order method).
-    
-    Author: Neco Kriel & James Beattie
-    
-    Args:
-        args (_type_): 
-
-    Returns:
-        _type_: _description_
-    
-    """
-    
-    # 2dr
-    two_dr = 2. * L /scalar_field.shape[gradient_dir]
-    
-    return (
-        np.roll(scalar_field, F, axis=gradient_dir) - np.roll(scalar_field, B, axis=gradient_dir) ) / two_dr
-    
-    
-def gradient_order4(scalar_field : np.ndarray, 
-                    gradient_dir : int, 
-                    L            : float = 1.0 ):
-    """
-    Compute the gradient of a scalar field  in one direction
-    using a five point stencil (fourth order method).
-    
-    Author: James Beattie
-    
-    Args:
-        args (_type_): 
-
-    Returns:
-        _type_: _description_
-    
-    """
-    
-    # 12dr
-    twelve_dr = 12. * L /scalar_field.shape[gradient_dir]
-    
-    # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
-    return ( - np.roll(scalar_field,2*F,axis=gradient_dir) \
-             + 8*np.roll(scalar_field,F,axis=gradient_dir) \
-             - 8*np.roll(scalar_field,B,axis=gradient_dir) \
-             + np.roll(scalar_field,2*B,axis=gradient_dir)) / twelve_dr
-
-
-def gradient_order6(scalar_field : np.ndarray, 
-                    gradient_dir : int, 
-                    L            : float = 1.0 ):
-    """
-    Compute the gradient of a scalar field  in one direction
-    using a seven point stencil (sixth order method).
-    
-    Author: James Beattie
-    
-    Args:
-        args (_type_): 
-
-    Returns:
-        _type_: _description_
-    
-    """
-    
-    # 60dr
-    twelve_dr = 60. * L /scalar_field.shape[gradient_dir]
-    
-    # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
-    return ( - np.roll(scalar_field,3*B,axis=gradient_dir)   \
-             + 9*np.roll(scalar_field,2*B,axis=gradient_dir) \
-             - 45*np.roll(scalar_field,B,axis=gradient_dir)  \
-             + 45*np.roll(scalar_field,F,axis=gradient_dir)  \
-             - 9*np.roll(scalar_field,2*F,axis=gradient_dir) \
-             + np.roll(scalar_field,3*F,axis=gradient_dir)) / twelve_dr
-
-
 ## END OF LIBRARY
