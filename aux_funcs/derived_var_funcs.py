@@ -19,7 +19,7 @@ from multiprocessing import Pool, shared_memory
 from scipy.ndimage import uniform_filter
 
 # import derivative stencils
-from .derivatives import *
+from .derivatives import derivative
 
 ## ###############################################################
 ## Derived Variable Functions
@@ -33,7 +33,7 @@ F = -1 # shift forwards
 B = +1 # shift backwards
 
 def vector_potential(vector_field   : np.ndarray,
-                     debug          : bool = False ):
+                     debug          : bool = False ) -> np.ndarray:
     """
     Create the underlying vector potential, a, of a vector field. For a magnetic field,
     assuming a Coulomb Gauage (div(a) = 0), this is the vector potential that satisfies the equation:
@@ -112,7 +112,7 @@ def vector_potential(vector_field   : np.ndarray,
     return a, b_recon
 
 
-def magnetic_helicity(magnetic_vector_field : np.ndarray ):
+def magnetic_helicity(magnetic_vector_field : np.ndarray ) -> np.ndarray:
     """
     Compute the magnetic helicity of a vector field.
     
@@ -132,7 +132,7 @@ def magnetic_helicity(magnetic_vector_field : np.ndarray ):
     return vector_dot_product(a,magnetic_vector_field)
 
 
-def kinetic_helicity(velocity_vector_field : np.ndarray ):
+def kinetic_helicity(velocity_vector_field : np.ndarray ) -> np.ndarray:
     """
     Compute the kinetic helicity of a vector field.
     
@@ -153,7 +153,7 @@ def kinetic_helicity(velocity_vector_field : np.ndarray ):
     return vector_dot_product(omega,velocity_vector_field)
     
     
-def current_helicity(magnetic_vector_field : np.ndarray ):
+def current_helicity(magnetic_vector_field : np.ndarray ) -> np.ndarray:
     """
     Compute the kinetic helicity of a vector field.
     
@@ -175,7 +175,8 @@ def current_helicity(magnetic_vector_field : np.ndarray ):
     
 
 def gradient_tensor(vector_field    : np.ndarray,
-                    order           : int = 4 ):
+                    order           : int = 2,
+                    L               : float = 1.0) -> np.ndarray:
     """
     Compute the gradient tensor of a vector field 
     using finite differences.
@@ -195,23 +196,34 @@ def gradient_tensor(vector_field    : np.ndarray,
     
     """
     
-    # determine order of derivative
-    if order == 2:
-        grad_fun = gradient_order2
-    elif order == 4:
-        grad_fun = gradient_order4
-    elif order == 6:
-        grad_fun = gradient_order6
+    # test if the vector field is 2D or 3D
+    if len(vector_field[0].shape) == 2:
+        two_D   = True 
+        coords  = [X,Y]
+    else:
+        three_D = False
+        coords  = [X,Y,Z]
+    
+    # set order and domain size for derivative
+    d = derivative(order=order, L=L)
+    
+    # create the gradient tensor in 2D
+    vel_grad = np.array([
+        [d.gradient(vector_field[X],
+                    gradient_dir=direction) for direction in coords],
+        [d.gradient(vector_field[Y],
+                    gradient_dir=direction) for direction in coords]])
+    
+    # and append 3d components if necessary
+    if three_D:
+        vel_grad = np.vstack([vel_grad,
+                              [d.gradient(vector_field[Z],
+                                          gradient_dir=direction) for direction in coords]])
+    
+    return np.einsum("ij...->ji...",vel_grad)
     
     
-    return np.einsum("ij...->ji...",
-                     np.array([
-                         [grad_fun(vector_field[X], gradient_dir=direction) for direction in [X,Y,Z]],
-                         [grad_fun(vector_field[Y], gradient_dir=direction) for direction in [X,Y,Z]],
-                         [grad_fun(vector_field[Z], gradient_dir=direction) for direction in [X,Y,Z]]]))
-    
-    
-def smooth_gradient_tensor(gradient_tensor, smoothing_size=10):
+def smooth_gradient_tensor(gradient_tensor, smoothing_size=10) -> np.ndarray:
     """
     Smooth a gradient tensor field by averaging over adjacent cells.
 
@@ -226,7 +238,7 @@ def smooth_gradient_tensor(gradient_tensor, smoothing_size=10):
     return uniform_filter(gradient_tensor, size=smoothing_size, axes=(-3, -2, -1), mode='nearest')
     
 
-def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
+def orthogonal_tensor_decomposition(tensor_field : np.ndarray ) -> np.ndarray:
     """
     Compute the symmetric, anti-symmetric and bulk components of a tensor field.
     
@@ -256,7 +268,7 @@ def orthogonal_tensor_decomposition(tensor_field : np.ndarray ):
     return tensor_sym, tensor_anti, tensor_bulk
 
 
-def hermitian_eigenvalues(matrix : np.ndarray):
+def hermitian_eigenvalues(matrix : np.ndarray) -> np.ndarray:
     """
     Compute the eigenvalues and eigenvectors of a 
     hermitian tensor based on analyical relations in: https://hal.science/hal-01501221/document
@@ -305,7 +317,7 @@ def hermitian_eigenvalues(matrix : np.ndarray):
 def eigs_stretch_tensor(vector_field : np.ndarray,
                         tensor_field : np.ndarray,
                         n_processes  : int = 4,
-                        parallel     : bool = False):
+                        parallel     : bool = False) -> np.ndarray:
     """
     Compute the stretch tensor of a tensor field along a given
     vector field (usually the magnetic field).
@@ -399,7 +411,7 @@ def eigs_stretch_tensor(vector_field : np.ndarray,
 
 
 def tensor_outer_product(vector_field_0 : np.ndarray,
-                         vector_field_1 : np.ndarray):
+                         vector_field_1 : np.ndarray) -> np.ndarray:
     """
     Compute the A_iB_j tensor field from a vector field.
     
@@ -422,7 +434,7 @@ def tensor_outer_product(vector_field_0 : np.ndarray,
 
 
 def tensor_contraction(tensor_field_0 : np.ndarray,
-                       tensor_field_1 : np.ndarray):
+                       tensor_field_1 : np.ndarray) -> np.ndarray:
     """
     Compute the A_iA_j tensor field from a vector field.
     
@@ -441,10 +453,10 @@ def tensor_contraction(tensor_field_0 : np.ndarray,
     
     """
         
-    return np.einsum('ij...,ij...->...',tensor_field_0,tensor_field_1)
+    return np.einsum('ij...,ij...->...',tensor_field_0, tensor_field_1)
 
 
-def helmholtz_decomposition(vector_field : np.ndarray):
+def helmholtz_decomposition(vector_field : np.ndarray) -> np.ndarray:
     """
     Compute the irrotational and solenoidal components of a vector field.
     
@@ -500,7 +512,8 @@ def helmholtz_decomposition(vector_field : np.ndarray):
 
 
 def vector_curl(vector_field    : np.ndarray,
-                order           : int = 2 ):
+                order           : int = 2,
+                L               : float = 1.0) -> np.ndarray:
     """
     Compute the vector curl (assumes periodic boundary conditions) 
     using either second or fourth order finite differences
@@ -515,24 +528,20 @@ def vector_curl(vector_field    : np.ndarray,
     
     """
     
-    if order == 2:
-        grad_fun = gradient_order2
-    elif order == 4:
-        grad_fun = gradient_order4
-    elif order == 6:
-        grad_fun = gradient_order6
+    # set order and domain size for derivative
+    d = derivative(order=order, L=L)
         
     # x component of curl
-    dFz_dy = grad_fun(vector_field[Z],gradient_dir=Y)
-    dFy_dz = grad_fun(vector_field[Y],gradient_dir=Z)
+    dFz_dy = d.gradient(vector_field[Z],gradient_dir=Y)
+    dFy_dz = d.gradient(vector_field[Y],gradient_dir=Z)
     
     # y component of curl
-    dFx_dz = grad_fun(vector_field[X],gradient_dir=Z)
-    dFz_dx = grad_fun(vector_field[Z],gradient_dir=X)
+    dFx_dz = d.gradient(vector_field[X],gradient_dir=Z)
+    dFz_dx = d.gradient(vector_field[Z],gradient_dir=X)
     
     # z component of curl
-    dFy_dx = grad_fun(vector_field[Y],gradient_dir=X)
-    dFx_dy = grad_fun(vector_field[X],gradient_dir=Y)
+    dFy_dx = d.gradient(vector_field[Y],gradient_dir=X)
+    dFx_dy = d.gradient(vector_field[X],gradient_dir=Y)
         
     return np.array([dFz_dy - dFy_dz,
                      dFx_dz - dFz_dx,
@@ -540,10 +549,13 @@ def vector_curl(vector_field    : np.ndarray,
     
 
 def vector_divergence(vector_field  : np.ndarray,
-                        order       : int = 2 ):
+                        order       : int = 2,
+                        L           : float = 1.0) -> np.ndarray:
     """
     Compute the vector divergence (assumes periodic boundary conditions)
     using either second or fourth order finite differences
+    
+    Author: James Beattie
     
     Args:
         args (_type_): 
@@ -553,21 +565,17 @@ def vector_divergence(vector_field  : np.ndarray,
     
     """
     
-    if order == 2:
-        grad_fun = gradient_order2
-    elif order == 4:
-        grad_fun = gradient_order4
-    elif order == 6:
-        grad_fun = gradient_order6
+    # set order and domain size for derivative
+    d = derivative(order=order, L=L)
     
-    dFx_dx = grad_fun(vector_field[X],gradient_dir=X)
-    dFy_dy = grad_fun(vector_field[Y],gradient_dir=Y)
-    dFz_dz = grad_fun(vector_field[Z],gradient_dir=Z)
+    dFx_dx = d.gradient(vector_field[X],gradient_dir=X)
+    dFy_dy = d.gradient(vector_field[Y],gradient_dir=Y)
+    dFz_dz = d.gradient(vector_field[Z],gradient_dir=Z)
     
     return dFx_dx + dFy_dy + dFz_dz
     
     
-def scalar_laplacian(scalar_field: np.ndarray):
+def scalar_laplacian(scalar_field: np.ndarray) -> np.ndarray:
     """
     Compute the scalar laplacian (assumes periodic boundary conditions)
     using second order finite differences
@@ -639,7 +647,7 @@ def vector_dot_product(vector1 : np.ndarray,
     return np.einsum("i...,i...->...",vector1,vector2)
 
 
-def field_magnitude(vector_field : np.ndarray):
+def field_magnitude(vector_field : np.ndarray) -> np.ndarray:
     """
     Compute the vector magnitude of a vector.
     
@@ -656,7 +664,7 @@ def field_magnitude(vector_field : np.ndarray):
     return np.sqrt(np.einsum("i...,i...->...",vector_field,vector_field))
 
 
-def field_RMS(scalar_field : np.ndarray):
+def field_RMS(scalar_field : np.ndarray) -> np.ndarray:
     """
     Compute the root-mean-squared of a field.
     
@@ -672,7 +680,9 @@ def field_RMS(scalar_field : np.ndarray):
     return np.sqrt(np.mean(scalar_field**2))
 
 
-def field_gradient(scalar_field : np.ndarray):
+def field_gradient(scalar_field : np.ndarray,
+                   order        : int = 2,
+                   L            : float = 1.0) -> np.ndarray:
     """
     Compute the gradient of a scalar field.
     
@@ -685,20 +695,24 @@ def field_gradient(scalar_field : np.ndarray):
         _type_: _description_
     
     """
+    
+    # set order and domain size for derivative
+    d = derivative(order=order, L=L)
+    
     ## format: (x, y, z)
     scalar_field = np.array(scalar_field)
     field_gradient = [
-        gradient_order2(scalar_field, gradient_dir)
+        d.gradient(scalar_field, gradient_dir)
         for gradient_dir in [X, Y, Z]
     ]
     return np.array(field_gradient)
 
 
-def compute_TNB_basis(vector_field : np.ndarray):
+def compute_TNB_basis(vector_field : np.ndarray) -> np.ndarray:
     """
     Compute the Fressnet frame of a vector field (TNB basis).
     
-    Author: Neco Kriel + James Beattie
+    Author: Neco Kriel & James Beattie
     
     Args:
         args (_type_): 
@@ -740,7 +754,7 @@ def compute_TNB_basis(vector_field : np.ndarray):
     return t_basis, n_basis, b_basis, kappa
 
 
-def TNB_coordinate_transformation(vector_field : np.ndarray):
+def TNB_coordinate_transformation(vector_field : np.ndarray) -> np.ndarray:
     """
     Transform a vector field into the TNB coordinate system.
     
@@ -768,7 +782,7 @@ def TNB_coordinate_transformation(vector_field : np.ndarray):
 
 
 def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
-                                    traceless       : bool = True ):
+                                    traceless       : bool = True ) -> np.ndarray:
     """
     Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the 
     TNB coordinate system of an underlying vector field.
