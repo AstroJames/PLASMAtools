@@ -198,10 +198,9 @@ def gradient_tensor(vector_field    : np.ndarray,
     
     # test if the vector field is 2D or 3D
     if len(vector_field[0].shape) == 2:
-        two_D   = True 
         coords  = [X,Y]
     else:
-        three_D = False
+        three_D = True
         coords  = [X,Y,Z]
     
     # set order and domain size for derivative
@@ -212,13 +211,14 @@ def gradient_tensor(vector_field    : np.ndarray,
         [d.gradient(vector_field[X],
                     gradient_dir=direction) for direction in coords],
         [d.gradient(vector_field[Y],
-                    gradient_dir=direction) for direction in coords]])
+                    gradient_dir=direction) for direction in coords],
+        [d.gradient(vector_field[Z],
+                   gradient_dir=direction) for direction in coords]])
     
     # and append 3d components if necessary
-    if three_D:
-        vel_grad = np.vstack([vel_grad,
-                              [d.gradient(vector_field[Z],
-                                          gradient_dir=direction) for direction in coords]])
+    # if three_D:
+    #     vel_grad = np.stack([vel_grad,
+    #                           [])
     
     return np.einsum("ij...->ji...",vel_grad)
     
@@ -825,8 +825,7 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
         return np.arctan( np.sqrt(ratio**2-1) )
     
     # Compute jacobian of B field
-    jacobian = smooth_gradient_tensor(gradient_tensor(vector_field,
-                               order=2))
+    jacobian = gradient_tensor(vector_field,order=6)
     
     # Make jacobian traceless (numerical errors will result in some trace, which is
     # equivalent to div(B) modes)
@@ -839,21 +838,21 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
     
     
     # # Compute TNB basis
-    # t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
-    # X   = np.array([b_basis,n_basis,t_basis])
-    # X_T = np.einsum("ij...->ji...",X)
+    t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
+    X   = np.array([b_basis,n_basis,t_basis])
+    X_T = np.einsum("ij...->ji...",X)
     
-    # # Put jacobian into the TNB basis
-    # trans_jacobian = np.einsum('ab...,bc...,cd... -> ad...', 
-    #                            X, 
-    #                            jacobian, 
-    #                            X_T)
+    # Put jacobian into the TNB basis
+    trans_jacobian = np.einsum('ab...,bc...,cd... -> ad...', 
+                               X, 
+                               jacobian, 
+                               X_T)
     
     # Construct M, the 2D jacobian of the B_perp field
-    M_11 = jacobian[0,0,...]
-    M_12 = jacobian[0,1,...]
-    M_21 = jacobian[1,0,...]
-    M_22 = jacobian[1,1,...]
+    M_11 = trans_jacobian[0,0,...]
+    M_12 = trans_jacobian[0,1,...]
+    M_21 = trans_jacobian[1,0,...]
+    M_22 = trans_jacobian[1,1,...]
     M    = np.array([[M_11, M_12],
                      [M_21, M_22]])
     
@@ -925,7 +924,7 @@ def classification_of_critical_points(trace_M       : np.ndarray,
                                                              trace_M > 0.0])
         
         # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
-        classification_array[2,...] = np.logical_and.reduce([is_3D, 
+        classification_array[1,...] += np.logical_and.reduce([is_3D, 
                                                               is_imag_eig, 
                                                               trace_M < 0.0])
         
