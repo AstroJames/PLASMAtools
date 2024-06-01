@@ -1,10 +1,11 @@
 """
-    Title: Derived Variable Functions
-    Author: James R. Beattie
-    Date: 09/07/2017
-    Description: Functions for calculating derived variables in the read_flash classes
+    Title:          Derived Variable Functions
+    Author:         James R. Beattie
+    Description:    Functions for calculating derived variables in the read class
     
-    Collaborators: Neco Kriel (curvature function).
+    
+    Collaborators:  Neco Kriel, Tanisha Ghosal, Anne Noer Kolborg, 
+                    Shashvat Varma, 
 
 """
 
@@ -22,15 +23,27 @@ from scipy.ndimage import uniform_filter
 from .derivatives import derivative
 
 ## ###############################################################
-## Derived Variable Functions
+## Globals
 ## ###############################################################
 
 # indexes
 X,Y,Z = 0,1,2
 
+# TODO: make consistent throughout library:
+# scalar fields : 1,N,N,N   (i, x, y, z)
+# vector fields : 3,N,N,N   (i, x, y, z)
+# tensor fields : M,M,N,N,N (i, j, x, y, z)
+
 # shifts for derivatives
 F = -1 # shift forwards
 B = +1 # shift backwards
+
+# physical constants
+mu0 = 4*np.pi
+
+## ###############################################################
+## Derived Variable Functions
+## ###############################################################
 
 def vector_potential(vector_field   : np.ndarray,
                      debug          : bool = False ) -> np.ndarray:
@@ -59,10 +72,15 @@ def vector_potential(vector_field   : np.ndarray,
     Author: James Beattie
 
     Args:
-        args (_type_): 
+        vector_field (np.ndarray)   : 3,N,N,N array of vector field, where 3 is the vector 
+                                        component and N is the number of grid points in each direction
+        debug (bool)                : debug flag for debugging the vector potential calculation. 
+                                        Default is False.
 
     Returns:
-        _type_: _description_
+         a (np.ndarray)       : 3,N,N,N array of vector potential, where 3 is the vector component and 
+                                N is the number of grid points in each direction
+         b_recon (np.ndarray) : the original vector field reconstructed from the vector potential for debugging.
     
     """
     
@@ -107,42 +125,45 @@ def vector_potential(vector_field   : np.ndarray,
     if debug:
         # have to at least a fourth order derivative here 
         # to get a good reconstruction
-        b_recon = vector_curl(a,order=4)  
+        b_recon = vector_curl(a,
+                              order=4,
+                              L=L)  
     
     return a, b_recon
 
 
 def magnetic_helicity(magnetic_vector_field : np.ndarray ) -> np.ndarray:
     """
-    Compute the magnetic helicity of a vector field.
+    Compute the magnetic helicity in the Coloumb gauge (gauge fixed).
     
     Author: James Beattie
-
+    
     Args:
-        args (_type_): 
-
+        magnetic_vector_field (np.ndarray): 3,N,N,N array of vector field,
+        
     Returns:
-        _type_: _description_
+        magnetic helicity (np.ndarray): N,N,N array of magnetic helicity (a . b).
+    
     """
     
     # compute the vector potential
     a, _ = vector_potential(magnetic_vector_field)
     
     # compute the magnetic helicity    
-    return vector_dot_product(a,magnetic_vector_field)
+    return np.array([vector_dot_product(a,magnetic_vector_field)])
 
 
 def kinetic_helicity(velocity_vector_field : np.ndarray ) -> np.ndarray:
     """
-    Compute the kinetic helicity of a vector field.
+    Compute the kinetic helicity of a velocity field.
     
     Author: James Beattie
     
     Args:
-        args (_type_):
+        velocity_vector_field (np.ndarray): 3,N,N,N array of vector field,
         
     Returns:
-        _type_: _description_
+        kinetic helicity (np.ndarray): N,N,N array of kinetic helicity (\omega . v).
     
     """
     
@@ -150,28 +171,28 @@ def kinetic_helicity(velocity_vector_field : np.ndarray ) -> np.ndarray:
     omega = vector_curl(velocity_vector_field)
     
     # compute the kinetic helicity
-    return vector_dot_product(omega,velocity_vector_field)
+    return np.array([vector_dot_product(omega,velocity_vector_field)])
     
     
 def current_helicity(magnetic_vector_field : np.ndarray ) -> np.ndarray:
     """
-    Compute the kinetic helicity of a vector field.
+    Compute the current helicity of a magnetic field.
     
     Author: James Beattie
     
     Args:
-        args (_type_):
+        magnetic_vector_field (np.ndarray): 3,N,N,N array of vector field,
         
     Returns:
-        _type_: _description_
+        current helicity (np.ndarray): N,N,N array of current helicity (j . b).
     
     """
 
     # compute the vorticity
-    current = ( 1 / (4*np.pi) ) * vector_curl(magnetic_vector_field)
+    current = ( 1 / mu0 ) * vector_curl(magnetic_vector_field)
     
-    # compute the kinetic helicity
-    return vector_dot_product(current,magnetic_vector_field)
+    # compute the current helicity
+    return np.array([vector_dot_product(current,magnetic_vector_field)])
     
 
 def gradient_tensor(vector_field    : np.ndarray,
@@ -214,25 +235,20 @@ def gradient_tensor(vector_field    : np.ndarray,
                     gradient_dir=direction) for direction in coords],
         [d.gradient(vector_field[Z],
                    gradient_dir=direction) for direction in coords]])
-    
-    # and append 3d components if necessary
-    # if three_D:
-    #     vel_grad = np.stack([vel_grad,
-    #                           [])
-    
+        
     return np.einsum("ij...->ji...",vel_grad)
     
-    
+        
 def smooth_gradient_tensor(gradient_tensor, smoothing_size=10) -> np.ndarray:
     """
     Smooth a gradient tensor field by averaging over adjacent cells.
 
     Args:
-        gradient_tensor (np.ndarray): The gradient tensor to smooth (shape: 3,3,N,N,N).
-        smoothing_size (int): The size of the smoothing window (default: 10).
+        gradient_tensor (np.ndarray)    : The gradient tensor to smooth (shape: 3,3,N,N,N).
+        smoothing_size (int)            : The size of the smoothing window (default: 10).
 
     Returns:
-        np.ndarray: The smoothed gradient tensor.
+        smoothed tensor field (np.ndarray) : The smoothed gradient tensor.
     """
 
     return uniform_filter(gradient_tensor, size=smoothing_size, axes=(-3, -2, -1), mode='nearest')
@@ -240,15 +256,33 @@ def smooth_gradient_tensor(gradient_tensor, smoothing_size=10) -> np.ndarray:
 
 def orthogonal_tensor_decomposition(tensor_field : np.ndarray ) -> np.ndarray:
     """
-    Compute the symmetric, anti-symmetric and bulk components of a tensor field.
+    Compute the symmetric, anti-symmetric and bulk components of a rank 2 tensor field.
+    
+    Consider a gradient tensor of the form:
+    
+    \partial_i f_j,
+    
+    then is has a symmetric component:
+    
+    \partial_i f_j = 0.5 ( \partial_i f_j + \partial_j f_i ) - 1/3 \delta_{ij} \partial_k f_k,
+    
+    an anti-symmetric component:
+    
+    \partial_i f_j = 0.5 ( \partial_i f_j - \partial_j f_i ),
+    
+    and a trace component:
+    
+    \partial_i f_j = 1/3 \delta_{ij} \partial_k f_k.
     
     Author: James Beattie
 
     Args:
-        args (_type_): 
+        tensor_field (np.ndarray): M,M,N,N,N array of tensor field, where M,M are the tensor components 
 
     Returns:
-        _type_: _description_
+        sym_tensor (np.ndarray) : M,M,N,N,N array of symmetric tensor field.
+        tensor_anti (np.ndarray): M,M,N,N,N array of anti-symmetric tensor field.
+        tensor_bulk (np.ndarray): M,M,N,N,N array of trace tensor field.
     """
     
     # transpose
@@ -268,12 +302,133 @@ def orthogonal_tensor_decomposition(tensor_field : np.ndarray ) -> np.ndarray:
     return tensor_sym, tensor_anti, tensor_bulk
 
 
+def vorticity_decomp(velocity_vector_field    : np.ndarray,
+                     magnetic_vector_field    : np.ndarray    = None,
+                     density_scalar_field     : np.ndarray    = None,
+                     pressure_scalar_field    : np.ndarray    = None,
+                     order                    : int           = 2,
+                     L                        : float         = 1.0) -> np.ndarray:
+    """
+    Compute the terms in the vorticity equation, including the compressive, stretching, baroclinic,
+    baroclinic magnetic, and tension terms. The magnetised (ideal) vorticity equation is given by:
+    
+    \frac{D \omega}{Dt} = - (\nabla . u) \omega + \omega . \nabla u +
+        \frac{1}{\rho^2} \nabla p \times \nabla \rho + 
+        \frac{1}{\rho^2} \nabla \rho \times \nabla b^2 / 2\mu_0 + 
+        \nabla \times (1/\rho) b . \nabla b / \mu_0,
+        
+    where \omega = \nabla \times u is the vorticity, u is the velocity field, p is the pressure field,
+    \rho is the density field, and b is the magnetic field and D/Dt is the Lagrangian derivative. 
+    
+    The terms are:
+    
+    compression term            : - (\nabla . u) \omega,
+    stretching term             : \omega . \nabla u,
+    baroclinic term             : 1/\rho^2 \nabla p \times \nabla \rho,
+    baroclinic magnetic term    : 1/\rho^2 \nabla \rho \times \nabla b^2 / 2\mu_0,
+    tension term                : 1/\mu_0 \nabla \times (1/\rho) b . \nabla b.
+    
+    hence the vorticity equation can be written as:
+    
+    \frac{D \omega}{Dt} = compression + stretching + baroclinic + baroclinic_magnetic + tension.
+
+    Author:
+        James Beattie
+
+    Args:
+        velocity_vector_field (np.ndarray)              : velocity vector field (3,N,N,N).
+        magnetic_vector_field (np.ndarray, optional)    : magnetic vector field (3,N,N,N). Defaults to None.
+        density_scalar_field (np.ndarray, optional)     : gas density scalar field (1,N,N,N). Defaults to None.
+        pressure_scalar_field (np.ndarray, optional)    : pressure scalar field (1,N,N,N). Defaults to None.
+        order (int, optional)                           : order of the derivative stencil. Defaults to 2.
+        L (float, optional)                             : the size of domain (needed for computing dx,dy,dz). Defaults to 1.0.
+
+    Returns:
+        omega (np.ndarray)                                                      : vorticity field.
+        compress (np.ndarray)                                                   : compressive term in the vorticity equation.
+        stretch (np.ndarray)                                                    : vortex stretching term in the vorticity equation. 
+        baroclinic (np.ndarray, None if density_scalar_field is None)           : gas baroclinic term in the vorticity equation.
+        baroclinic_magnetic (np.ndarray, None if magnetic_vector_field is None) : magnetic baroclinic term in the vorticity equation. 
+        tension (np.ndarray, None if magnetic_vector_field is None)             : magnetic tension term in the vorticity equation.
+    """
+    
+    # initialise terms that may or may not be computed
+    baroclinic           = None
+    baroclinic_magnetic  = None
+    tension              = None
+    
+    # now construct the terms in the vorticity equation
+    
+    # compute the vorticity, \omega = \nabla \times u
+    omega = vector_curl(velocity_vector_field,
+                        order=order,
+                        L=L)
+    
+    # vorticity compression term, - (\nabla . u) \omega
+    compress = - omega * vector_divergence(velocity_vector_field,
+                                           order=order,
+                                           L=L)   
+    
+    # vortex stretching term, \omega . \nabla u
+    stretch = np.einsum("i...,ij...->j...",
+                        omega,
+                        gradient_tensor(velocity_vector_field,
+                                        order=order,
+                                        L=L))
+    
+    # if the magnetic and density is not None, compute the magnetic terms
+    if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
+                
+        # magnetic baroclinic term, 1/\rho^2 \nabla \rho \times \nabla b^2 / 2\mu_0
+        baroclinic_magnetic = (1.0/density_scalar_field[X]**2) * vector_cross_product(
+            scalar_gradient(vector_magnitude(magnetic_vector_field)**2 / (2 * mu0),
+                            order=order,
+                            L=L),
+            scalar_gradient(density_scalar_field[X],
+                            order=order,
+                            L=L))
+        
+        # magnetic tension term 1/\mu_0 \nabla \times (1/\rho) b . \nabla b)
+        tension = vector_curl(
+            (1.0/density_scalar_field[X]) * np.einsum("i...,ij...->j...",
+                      magnetic_vector_field,
+                      gradient_tensor(magnetic_vector_field,
+                                      order=order,
+                                      L=L)
+                      ) / mu0, 
+            order=order, 
+            L=L)
+        
+    # if density and pressure is not None, compute the baroclinic term
+    if ( density_scalar_field is not None )and ( pressure_scalar_field is not None ):
+        
+        # baroclinic term, 1/\rho^2 \nabla p \times \nabla \rho
+        baroclinic = (1/ density_scalar_field[X]**2) * vector_cross_product(
+            scalar_gradient(pressure_scalar_field[X],
+                            order=order,
+                            L=L),
+            scalar_gradient(density_scalar_field[X],
+                            order=order,
+                            L=L))
+        
+    return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
+        
+
 def hermitian_eigenvalues(matrix : np.ndarray) -> np.ndarray:
     """
     Compute the eigenvalues and eigenvectors of a 
     hermitian tensor based on analyical relations in: https://hal.science/hal-01501221/document
     
-    Author: James Beattie
+    Author: James Beattie & Shashvat Varma
+    
+    Args:
+        matrix (np.ndarray): 3,3 matrix of the tensor field
+    
+    Returns:
+        eigenvalues (np.ndarray)    : 3 array of eigenvalues
+        zeta_1 (np.ndarray)         : 3 array of eigenvector 1
+        zeta_2 (np.ndarray)         : 3 array of eigenvector 2
+        zeta_3 (np.ndarray)         : 3 array of eigenvector 3
     
     """
     
@@ -458,15 +613,19 @@ def tensor_contraction(tensor_field_0 : np.ndarray,
 
 def helmholtz_decomposition(vector_field : np.ndarray) -> np.ndarray:
     """
-    Compute the irrotational and solenoidal components of a vector field.
+    Compute the irrotational and solenoidal components of a vector field using the Helmholtz decomposition
+    in Fourier space (assumes periodic boundary conditions).
     
-    Author: James Beattie (assumes periodic boundary conditions)
+    Author: James Beattie 
     
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field, where 
+                                    3 is the vector component and N is the number of grid points in each 
+                                    direction
 
     Returns:
-        _type_: _description_
+        F_irrot (np.ndarray) : 3,N,N,N array of irrotational component of the vector field (curl free)
+        F_solen (np.ndarray) : 3,N,N,N array of solenoidal component of the vector field (divergence free)
     
     """
     # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
@@ -515,16 +674,20 @@ def vector_curl(vector_field    : np.ndarray,
                 order           : int = 2,
                 L               : float = 1.0) -> np.ndarray:
     """
-    Compute the vector curl (assumes periodic boundary conditions) 
-    using either second or fourth order finite differences
+    Compute the curl of a vector field (assumes periodic boundary conditions).
     
     Author: James Beattie
     
     Args:
-        args (_type_): 
-
+        vector_field (np.ndarray)   : 3,N,N,N array of vector field,
+                                        where 3 is the vector component and N is the number of grid
+                                        points in each direction
+        order (int)                 : order of finite difference used to compute the
+                                        curl. Options are 2, 4 and 6. Default is 4.
+        L (float)                   : the size of the domain (needed for computing dx,dy,dz). Default is 1.0.
+         
     Returns:
-        _type_: _description_
+        curl_vector_field (np.ndarray) : 3,N,N,N array of curl of the vector field
     
     """
     
@@ -552,16 +715,20 @@ def vector_divergence(vector_field  : np.ndarray,
                         order       : int = 2,
                         L           : float = 1.0) -> np.ndarray:
     """
-    Compute the vector divergence (assumes periodic boundary conditions)
-    using either second or fourth order finite differences
+    Compute the vector divergence (assumes periodic boundary conditions).
     
     Author: James Beattie
     
     Args:
-        args (_type_): 
-
+        vector_field (np.ndarray)   : 3,N,N,N array of vector field,
+                                        where 3 is the vector component and N is the number of grid
+                                        points in each direction
+        order (int)                 : order of finite difference used to compute the
+                                        curl. Options are 2, 4 and 6. Default is 4.
+        L (float)                   : the size of the domain (needed for computing dx,dy,dz). Default is 1.0.
+        
     Returns:
-        _type_: _description_
+        divergence_vector_field (np.ndarray) : N,N,N array of divergence of the vector field
     
     """
     
@@ -577,16 +744,18 @@ def vector_divergence(vector_field  : np.ndarray,
     
 def scalar_laplacian(scalar_field: np.ndarray) -> np.ndarray:
     """
-    Compute the scalar laplacian (assumes periodic boundary conditions)
-    using second order finite differences
+    Compute the scalar laplacian using second order finite differences
+    (assumes periodic boundary conditions).
     
     Author: James Beattie
     
     Args:
-        args (_type_): 
+        scalar_field (np.ndarray)   : N,N,N array of scalar field,
+                                        where N is the number of grid
+                                        points in each direction    
 
     Returns:
-        _type_: _description_
+        laplacian_scalar_field (np.ndarray) : N,N,N array of laplacian of the scalar field
     
     """
         
@@ -600,41 +769,40 @@ def scalar_laplacian(scalar_field: np.ndarray) -> np.ndarray:
     d2Fz_dz2 = (np.roll(scalar_field,F,axis=Z) - 2*scalar_field + np.roll(scalar_field,B,axis=Z))/dz**2
     
     return d2Fx_dx2 + d2Fy_dy2 + d2Fz_dz2
+
         
-        
-def vector_cross_product(vector1 : np.ndarray,
-                         vector2 : np.ndarray):
+def vector_cross_product(vector_field_1 : np.ndarray,
+                         vector_field_2 : np.ndarray):
     """
     Compute the vector cross product of two vectors.
     
-    Auxillary functions for computeTNBBasis
-    
-    Author: Neco Kriel
+    Author: Neco Kriel & James Beattie
 
     Args:
-        args (_type_): 
+        vector_field_1 (np.ndarray): 3,N,N,N array of vector field,
+                                where 3 is the vector component and N is the number of grid
+                                points in each direction
+        vector_field_2 (np.ndarray): 3,N,N,N array of vector field,
+                                where 3 is the vector component and N is the number of grid
+                                points in each direction
 
     Returns:
-        _type_: _description_
+        vector_field_3 (np.ndarray): 3,N,N,N array of vector cross product of the two vectors
     
     """
     
-    vector3 = np.array([
-    vector1[Y] * vector2[Z] - vector1[Z] * vector2[Y],
-    vector1[Z] * vector2[X] - vector1[X] * vector2[Z],
-    vector1[X] * vector2[Y] - vector1[Y] * vector2[X]
-    ])
-    return vector3    
+    return np.array([
+                vector_field_1[Y] * vector_field_2[Z] - vector_field_1[Z] * vector_field_2[Y],
+                vector_field_1[Z] * vector_field_2[X] - vector_field_1[X] * vector_field_2[Z],
+                vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]])
 
 
-def vector_dot_product(vector1 : np.ndarray,
-                       vector2 : np.ndarray):
+def vector_dot_product(vector_field_1 : np.ndarray,
+                       vector_field_2 : np.ndarray):
     """
     Compute the vector dot product of two vectors.
     
-    Auxillary functions for computeTNBBasis
-    
-    Author: Neco Kriel
+    Author: Neco Kriel, James Beattie
     
     Args:
         args (_type_): 
@@ -644,55 +812,64 @@ def vector_dot_product(vector1 : np.ndarray,
     
     """
     
-    return np.einsum("i...,i...->...",vector1,vector2)
+    return np.einsum("i...,i...->...",vector_field_1,vector_field_2)
 
 
-def field_magnitude(vector_field : np.ndarray) -> np.ndarray:
+def vector_magnitude(vector_field : np.ndarray) -> np.ndarray:
     """
     Compute the vector magnitude of a vector.
     
     Author: Neco Kriel
     
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field,
+                                    where 3 is the vector component and N is the number of grid
+                                    points in each direction
 
     Returns:
-        _type_: _description_
+        vector mag (np.ndarray): N,N,N array of vector cross product of the two vectors
     
     """
     vector_field = np.array(vector_field)
+    
     return np.sqrt(np.einsum("i...,i...->...",vector_field,vector_field))
 
 
-def field_RMS(scalar_field : np.ndarray) -> np.ndarray:
+def scalar_RMS(scalar_field : np.ndarray) -> np.ndarray:
     """
-    Compute the root-mean-squared of a field.
+    Compute the root-mean-squared of a scalar field.
     
     Author: Neco Kriel
     
     Args:
-        args (_type_): 
+        scalar_field (np.ndarray): N,N,N array of scalar field,
+                                    where N is the number of grid points in each direction  
 
     Returns:
-        _type_: _description_
+        scalar_RMS (np.ndarray): scalar RMS of the scalar field
     
     """
     return np.sqrt(np.mean(scalar_field**2))
 
 
-def field_gradient(scalar_field : np.ndarray,
+def scalar_gradient(scalar_field : np.ndarray,
                    order        : int = 2,
                    L            : float = 1.0) -> np.ndarray:
     """
-    Compute the gradient of a scalar field.
+    Compute the gradient of a scalar field, grad(\phi). 
     
     Author: Neco Kriel & James Beattie
     
     Args:
-        args (_type_): 
+        scalar_field (np.ndarray)   : N,N,N array of vector field,
+                                        where 3 is the vector component and N is the number of grid
+                                        points in each direction
+        order (int)                 : order of finite difference used to compute the derivatives. 
+                                        Options are 2, 4 and 6. Default is 4.
+        L (float)                   : the size of the domain (needed for computing dx,dy,dz). Default is 1.0.
 
     Returns:
-        _type_: _description_
+        grad_scalar_field (np.ndarray) : 3,N,N,N array of gradient of the scalar field
     
     """
     
@@ -715,20 +892,25 @@ def compute_TNB_basis(vector_field : np.ndarray) -> np.ndarray:
     Author: Neco Kriel & James Beattie
     
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field,
+                                    where 3 is the vector component and N is the number of grid
+                                    points in each direction
 
     Returns:
-        _type_: _description_
+        t_basis (np.ndarray) : 3,N,N,N array of tangent basis of the vector field
+        n_basis (np.ndarray) : 3,N,N,N array of normal basis of the vector field
+        b_basis (np.ndarray) : 3,N,N,N array of binormal basis of the vector field
+        kappa (np.ndarray)   : N,N,N array of curvature of the vector field
     
     """
     ## format: (component, x, y, z)
     vector_field = np.array(vector_field)
-    field_magn = field_magnitude(vector_field)
+    field_magn = vector_magnitude(vector_field)
     ## ---- COMPUTE TANGENT BASIS
     t_basis = vector_field / field_magn
     ## df_j/dx_i: (component-j, gradient-direction-i, x, y, z)
     gradient_tensor = np.array([
-        field_gradient(field_component)
+        scalar_gradient(field_component)
         for field_component in vector_field
     ])
     ## ---- COMPUTE NORMAL BASIS
@@ -745,7 +927,7 @@ def compute_TNB_basis(vector_field : np.ndarray) -> np.ndarray:
     ## (f_i df_j/dx_i) / (f_k f_k) - (f_i f_j f_m df_m/dx_i) / (f_k f_k)^2
     n_basis = n_basis_term1 / field_magn**2 - n_basis_term2 / field_magn**4
     ## field curvature
-    kappa = field_magnitude(n_basis)
+    kappa = vector_magnitude(n_basis)
     ## normal basis
     n_basis /= kappa
     ## ---- COMPUTE BINORMAL BASIS
@@ -756,15 +938,17 @@ def compute_TNB_basis(vector_field : np.ndarray) -> np.ndarray:
 
 def TNB_coordinate_transformation(vector_field : np.ndarray) -> np.ndarray:
     """
-    Transform a vector field into the TNB coordinate system.
+    Transform a vector field into the Fressnet frame of a vector field (TNB basis).
     
     Author: James Beattie
     
     Args:
-        args (_type_): 
+        vector_field (np.ndarray): 3,N,N,N array of vector field,
+                                    where 3 is the vector component and N is the number of grid
+                                    points in each direction
 
     Returns:
-        _type_: _description_
+        vector_field_TNB (np.ndarray) : 3,N,N,N array of vector field in the TNB basis
     
     """
     
@@ -772,15 +956,12 @@ def TNB_coordinate_transformation(vector_field : np.ndarray) -> np.ndarray:
     t_basis, n_basis, b_basis, _ = compute_TNB_basis(vector_field)
     
     # transform vector field to TNB basis
-    vector_field_TNB = np.array([
+    return np.array([
         vector_dot_product(vector_field, t_basis),
         vector_dot_product(vector_field, n_basis),
-        vector_dot_product(vector_field, b_basis)
-    ])
+        vector_dot_product(vector_field, b_basis)])
     
-    return vector_field_TNB
-
-
+     
 def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                                     traceless       : bool = True ) -> np.ndarray:
     """
@@ -834,7 +1015,6 @@ def TNB_jacobian_stability_analysis(vector_field    : np.ndarray,
                                                 np.einsum("ii...",
                                                         jacobian),
                                                 np.eye(3))
-    
     
     
     # # Compute TNB basis

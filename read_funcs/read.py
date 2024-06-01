@@ -436,9 +436,8 @@ class Fields():
                     nu: float       = 0.0,
                     n_workers: int  = 1) -> None:
         """
-        General function for adding derived variables to the data object.
-        
-        
+        General function for adding derived variables to the data object,
+        rather than having to derive them in the aux funcs script.
         
         """
         
