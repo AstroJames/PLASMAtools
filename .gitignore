@@ -1,5 +1,4 @@
 .DS_Store
 settings*
-*.pyc
-__pycache__
-*.pyo
+__pycache__/
+*.py[cod]
