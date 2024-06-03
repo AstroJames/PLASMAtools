@@ -396,7 +396,7 @@ class Fields():
                                 field_mag += field_var**2
                         else:
                             setattr(self, f"{field_str}{coord}",field_var)
-                    else:
+                    else: # vector mag without reformatting
                         if vector_magnitude:
                             if coord == "x":
                                 field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
