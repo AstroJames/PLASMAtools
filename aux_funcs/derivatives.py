@@ -103,8 +103,10 @@ class Derivative:
         Returns:
             np.ndarray: the scalar field with ghost cells removed.
         """
+        
         slices               = [slice(None)] * scalar_field.ndim
         slices[gradient_dir] = slice(self.num_of_gcs, -self.num_of_gcs)
+        
         return scalar_field[tuple(slices)]
     
     
@@ -189,7 +191,7 @@ class Derivative:
                         gradient_dir)
             # six point stencil
             elif self.stencil == 6:
-                # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
+                # df/dr = (-f(r+3dr) + 9f(r+2dr) - 45f(r+dr) + 45f(r-dr) - 9f(r-2dr) + f(r-3dr))/60dr
                 # and remove the ghost cells in 3D and return the gradient
                 return self.remove_ghost_cells(( 
                         - np.roll(scalar_field,     3*B, axis=gradient_dir)  \
@@ -201,7 +203,7 @@ class Derivative:
                         gradient_dir)
             # eight point stencil
             elif self.stencil == 8:
-                # df/dr = (-f(r+3dr) + 9f(r+2dr) - 45f(r+dr) + 45f(r-dr) - 9f(r-2dr) + f(r-3dr))/60dr
+                # df/dr = (-f(r+4dr) + 12f(r+3dr) - 66f(r+2dr) + 192f(r+dr) - 192f(r-dr) + 66f(r-2dr) - 12f(r-3dr) + f(r-4dr))/280dr
                 # and remove the ghost cells in 3D and return the gradient
                 return self.remove_ghost_cells((
                             -np.roll(scalar_field,      4*F, axis=gradient_dir)
