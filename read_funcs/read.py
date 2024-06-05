@@ -360,23 +360,23 @@ class Fields():
                 if self.reformat:
                     print(f"Reading in reformatted grid attribute: {field_str}")
                     setattr(self, field_str, 
-                            reformat_FLASH_field(g[field_str][:,:,:,:],
+                            np.array([reformat_FLASH_field(g[field_str][:,:,:,:],
                                                  self.nxb,
                                                  self.nyb,
                                                  self.nzb,
                                                  self.int_properties["iprocs"],
                                                  self.int_properties["jprocs"],
                                                  self.int_properties["kprocs"],
-                                                 debug))
+                                                 debug)]))
                 else:
-                    setattr(self, field_str, g[field_str][:,:,:,:])
+                    setattr(self, field_str, np.array([g[field_str][:,:,:,:]]))
                 g.close()
             
             elif field_lookup_type[field_str] == "vector":
                 g = File(self.filename, 'r')
                 for coord in ["x","y","z"]:
                     print(f"Reading in grid attribute: {field_str}{coord}")
-                    if self.reformat:
+                    if self.reformat: # if reformatting is required
                         #time1 = timeit.default_timer()
                         field_var = reformat_FLASH_field(g[f"{field_str}{coord}"][:,:,:,:],
                                                          self.nxb,
@@ -395,17 +395,31 @@ class Fields():
                             else:
                                 field_mag += field_var**2
                         else:
-                            setattr(self, f"{field_str}{coord}",field_var)
+                            if coord == "x":
+                                field = np.array([field_var])
+                            else:
+                                field = np.concatenate([field,[field_var]])
+                                
                     else: # vector mag without reformatting
                         if vector_magnitude:
                             if coord == "x":
                                 field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
                             else:
-                                field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2
+                                field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2   
                         else:
-                            setattr(self, f"{field_str}{coord}", g[f"{field_str}{coord}"][:,:,:,:])
+                            if coord == "x":
+                                field = np.concatenate([g[f"{field_str}{coord}"][:,:,:,:]])
+                            else:
+                                field = np.concatenate([field,[g[f"{field_str}{coord}"][:,:,:,:]]])                  
+                            
+                # now read in the fields       
                 if vector_magnitude:
                     setattr(self, f"{field_str}_mag", np.sqrt(field_mag))
+                    del field_mag, field_var
+                else:
+                    setattr(self, f"{field_str}",field)    
+                    del field, field_var
+                
                 g.close()
                 
         elif self.sim_data_type == "bhac":
