@@ -45,7 +45,7 @@ boundary_lookup = {0: 'periodic',
 ## Derived Variable Functions
 ## ###############################################################
 
-class DerivedVariables:
+class DerivedVars:
     """
     Class for calculating derived variables from the magnetic field, velocity field, and density field.
     """
@@ -76,24 +76,25 @@ class DerivedVariables:
         """
         
         # Set the class variables
-        self.L          = L                                     # domain size
-        self.bcs        = [boundary_lookup[int(list(bcs)[i])] 
-                           for i in range(len(list(bcs)))]      # boundary conditions
-        self.mu0        = mu0                                   # magnetic permeability
-        self.stencil    = stencil                               # finite difference stencil size
+        self.L              = L                                     # domain size
+        self.bcs            = [boundary_lookup[int(list(bcs)[i])] 
+                                for i in range(len(list(bcs)))]     # boundary conditions
+        self.mu0            = mu0                                   # magnetic permeability
+        self.stencil        = stencil                               # finite difference stencil size
+        self.num_of_dims    = num_of_dims                           # number of dimensions in the domain
         
         # create a derivative object to be shared globally
         self.d = Derivative(self.stencil,
                             self.L)
         
         # Set the number of dimensions
-        if num_of_dims == 3:
+        if self.num_of_dims == 3:
             self.coords = [X,Y,Z] # 3D
             assert len(self.bcs) == 3, "Boundary conditions must be specified for all three dimensions."
-        elif num_of_dims == 2:
+        elif self.num_of_dims == 2:
             self.coords = [X,Y]   # 2D
             assert len(self.bcs) == 2, "Boundary conditions must be specified for all two dimensions."
-        elif num_of_dims == 1:
+        elif self.num_of_dims == 1:
             self.coords = [X]     # 1D 
             assert len(self.bcs) == 1, "Boundary conditions must be specified for all one dimension."
         else:
@@ -176,10 +177,7 @@ class DerivedVariables:
 
         # Assuming a cubic domain    
         N = vector_field.shape[1]  
-                
-        # Space holder for the reconstructed magnetic field
-        b_recon = np.zeros_like(vector_field)
-        
+                        
         # wave vectors
         kx = 2 * np.pi * fft.fftfreq(N, d=self.L/N) / self.L
         ky = 2 * np.pi * fft.fftfreq(N, d=self.L/N) / self.L
@@ -198,28 +196,29 @@ class DerivedVariables:
         k_norm[k_norm == 0] = np.inf
         
         # Take the cross product of k and the vector field
-        a_hat = 1j * self.vector_cross_product(k, 
-                                               vector_field_FFT) / k_norm**2
-        
         # Take the inverse FFT to get the vector potential
-        a = np.real(fft.ifftn(a_hat, 
+        a = np.real(fft.ifftn(1j * self.vector_cross_product(k,
+                                                             vector_field_FFT) / k_norm**2, 
                               axes=(1, 2, 3),
                               norm="forward"))
         
         # Take the curl of the vector potential to get the reconstructed magnetic field
         # for debuging
         if debug:
+            # Space holder for the reconstructed magnetic field
+            b_recon = np.zeros_like(vector_field)
             # have to at least a fourth order derivative here 
             # to get a good reconstruction
             self.set_stencil(4)
             b_recon = self.vector_curl(a)  
             self.set_stencil(2)
+            return a, b_recon
         
-        return a, b_recon
+        return a
 
 
     def magnetic_helicity(self,
-                        magnetic_vector_field : np.ndarray ) -> np.ndarray:
+                          magnetic_vector_field : np.ndarray ) -> np.ndarray:
         """
         Compute the magnetic helicity in the Coloumb gauge (gauge fixed).
         
@@ -232,13 +231,11 @@ class DerivedVariables:
             magnetic helicity (np.ndarray): N,N,N array of magnetic helicity (a . b).
         
         """
-        
-        # compute the vector potential
-        a, _ = self.vector_potential(magnetic_vector_field)
-        
+
         # compute the magnetic helicity    
-        return np.array([self.vector_dot_product(a,
-                                                 magnetic_vector_field)])
+        return np.array([self.vector_dot_product(
+            self.vector_potential(magnetic_vector_field),
+            magnetic_vector_field)])
 
 
     def kinetic_helicity(self,
@@ -256,12 +253,10 @@ class DerivedVariables:
         
         """
         
-        # compute the vorticity
-        omega = self.vector_curl(velocity_vector_field)
-    
         # compute the kinetic helicity
-        return np.array([self.vector_dot_product(omega,
-                                                 velocity_vector_field)])
+        return np.array([self.vector_dot_product(
+            self.vector_curl(velocity_vector_field),
+            velocity_vector_field)])
     
     
     def current_helicity(self,
@@ -279,12 +274,10 @@ class DerivedVariables:
         
         """
 
-        # compute the vorticity
-        current = self.vector_curl(magnetic_vector_field) / self.mu0
-        
         # compute the current helicity
-        return np.array([self.vector_dot_product(current,
-                                                 magnetic_vector_field)])
+        return np.array([self.vector_dot_product(
+            self.vector_curl(magnetic_vector_field) / self.mu0,
+            magnetic_vector_field)])
     
 
     def gradient_tensor(self,
@@ -482,24 +475,23 @@ class DerivedVariables:
         compress = - omega * self.vector_divergence(velocity_vector_field)   
         
         # vortex stretching term, \omega . \nabla u
-        stretch = np.einsum("i...,ij...->j...",
-                            omega,
-                            self.gradient_tensor(velocity_vector_field))
+        stretch = self.vector_dot_tensor(omega,
+                                         self.gradient_tensor(velocity_vector_field))
         
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
                     
             # magnetic baroclinic term, 1/\rho^2 \nabla \rho \times \nabla b^2 / 2\mu_0
             baroclinic_magnetic = (1./density_scalar_field[X]**2) * self.vector_cross_product(
-                self.scalar_gradient(self.vector_dot_product(magnetic_vector_field) / (2 * self.mu0)),
+                self.scalar_gradient(self.vector_dot_product(magnetic_vector_field,
+                                                             magnetic_vector_field) / (2 * self.mu0)),
                 self.scalar_gradient(density_scalar_field[X]))
             
             # magnetic tension term 1/\mu_0 \nabla \times (1/\rho) b . \nabla b)
             tension = self.vector_curl(
-                (1./density_scalar_field[X]) * np.einsum("i...,ij...->j...",
-                        magnetic_vector_field,
-                        self.gradient_tensor(magnetic_vector_field)
-                        ) / self.mu0
+                (1./density_scalar_field[X]) * self.vector_dot_tensor(
+                    magnetic_vector_field,
+                    self.gradient_tensor(magnetic_vector_field)) / self.mu0
                 )
             
         # if density and pressure is not None, compute the baroclinic term
@@ -596,30 +588,55 @@ class DerivedVariables:
                          vector_field_1)
 
 
-    def tensor_contraction(self,
+    def tensor_double_contraction(self,
                            tensor_field_0 : np.ndarray,
                            tensor_field_1 : np.ndarray) -> np.ndarray:
         """
-        Compute the A_iA_j tensor field from a vector field.
+        Compute the A_ijA_ij scalar field from a tensor field.
         
         Author: James Beattie
         
         Args:
-            tensor_field_0 (np.ndarray): (i,j),N,N,N array of tensor field, where 
-            (i,j) are the tensor components and N is the number of grid points in each 
-            direction
-            tensor_field_1 (np.ndarray): (i,j),N,N,N array of tensor field, where 
-            (i,j) are the tensor components and N is the number of grid points in each 
-            direction
+            tensor_field_0 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
+                                            (i,j) are the tensor components and N is the number of grid
+                                            points in each direction
+            tensor_field_1 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
+                                            (i,j) are the tensor components and N is the number of grid 
+                                            points in each direction
 
         Returns:
-            A_i_A_jB_i_B_j : the A_i_A_jB_i_B_j contraction scalar field.
+            A_ijB_ij = a_11 b_11 + a_12 b_11 + ... a_nn b_nn: the contraction scalar field.
         
         """
             
         return np.einsum('ij...,ij...->...',
                          tensor_field_0,
                          tensor_field_1)
+
+    def vector_dot_tensor(self,
+                          vector_field : np.ndarray,
+                          tensor_field : np.ndarray) -> np.ndarray:
+        """
+        Compute the A_iA_j tensor field from a vector field.
+        
+        Author: James Beattie
+        
+        Args:
+            vector (np.ndarray)         : i,N,N,N array of vector field, where 
+                                            i, are the vector components and N is the number of grid 
+                                            points in each direction
+            tensor_field_1 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
+                                            (i,j) are the tensor components and N is the number of grid
+                                            points in each direction
+
+        Returns:
+            A_iB_ij : a_1b_1j + a_2b_2j + ... contraction vector field.
+        
+        """
+            
+        return np.einsum('i...,ij...->j...',
+                         vector_field,
+                         tensor_field)
 
 
     def helmholtz_decomposition(self,
@@ -704,10 +721,12 @@ class DerivedVariables:
         if self.num_of_dims == 1:
             ValueError("Vector curl is not defined for 1D.")
         elif self.num_of_dims == 2:
-            return np.array([self.d.gradient(vector_field[Y],
+            return np.array([0,
+                             0,
+                             self.d.gradient(vector_field[Y],
                                 gradient_dir       = X,
                                 boundary_condition = self.bcs[X]) - 
-                            self.d.gradient(vector_field[X],
+                             self.d.gradient(vector_field[X],
                                 gradient_dir       = Y,
                                 boundary_condition = self.bcs[Y])])
         elif self.num_of_dims == 3: 
@@ -800,7 +819,9 @@ class DerivedVariables:
             ValueError("Vector cross product is not defined for 1D.")
         elif self.num_of_dims == 2:
             return np.array([
-                    vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]]
+                0,
+                0,
+                vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]]
                         )
         elif self.num_of_dims == 3:
             return np.array([
