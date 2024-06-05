@@ -8,9 +8,72 @@
 
 import numpy as np
 
+# Try to import numba
+try:
+    from numba import njit
+    NUMBA_AVAILABLE = True
+    print("Utilising numba for I/O.")
+except ImportError:
+    NUMBA_AVAILABLE = False
+
 ## ###############################################################
 ## Auxillary reading functions (can be jit compiled)
 ## ###############################################################            
+
+if NUMBA_AVAILABLE:
+    @njit('float32[:,:,:](float32[:,:,:,:], int32, int32, int32, int32, int32, int32)', 
+          parallel  = True, 
+          fastmath  = True, 
+          nogil     = True)
+    def reformat_flash_field_numba(field    : np.ndarray,
+                                   nxb      : int,
+                                   nyb      : int,
+                                   nzb      : int, 
+                                   iprocs   : int,
+                                   jprocs   : int,
+                                   kprocs   : int):
+        # Initialise an empty (x,y,z) field
+        field_sorted = np.zeros((nyb*jprocs,
+                                 nzb*kprocs,
+                                 nxb*iprocs),
+                                dtype=np.float32)
+
+        # The block counter for looping through blocks
+        block_counter = 0
+
+        # Sort the unsorted field
+        for j in range(jprocs):
+            for k in range(kprocs):
+                for i in range(iprocs):
+                    field_sorted[j*nyb:(j+1)*nyb,
+                                 k*nzb:(k+1)*nzb,
+                                 i*nxb:(i+1)*nxb] = field[block_counter, :, :, :]
+                    block_counter += 1
+        return field_sorted
+else:
+    def reformat_flash_field_numba(field    : np.ndarray,
+                                   nxb      : int,
+                                   nyb      : int,
+                                   nzb      : int, 
+                                   iprocs   : int,
+                                   jprocs   : int,
+                                   kprocs   : int):
+        # Initialise an empty (x,y,z) field
+        field_sorted = np.zeros((nyb*jprocs,
+                                 nzb*kprocs,
+                                 nxb*iprocs),
+                                dtype=np.float32)
+
+        # The block counter for looping through blocks
+        block_counter = 0
+
+        # Sort the unsorted field
+        for j in range(jprocs):
+            for k in range(kprocs):
+                for i in range(iprocs):
+                    field_sorted[j*nyb:(j+1)*nyb, k*nzb:(k+1)*nzb, i*nxb:(i+1)*nxb] = field[block_counter, :, :, :]
+                    block_counter += 1
+        return field_sorted
     
 def reformat_FLASH_field(field  : np.ndarray,
                          nxb    : int,
@@ -19,7 +82,7 @@ def reformat_FLASH_field(field  : np.ndarray,
                          iprocs : int,
                          jprocs : int,
                          kprocs : int,
-                         debug) -> np.ndarray:
+                         debug  : bool) -> np.ndarray:
     """
     This function reformats the FLASH block / core format into
     (x,y,z) format for processing in real-space coordinates utilising
@@ -52,25 +115,7 @@ def reformat_FLASH_field(field  : np.ndarray,
 
     # Initialise an empty (x,y,z) field
     # has to be the same dtype as input field (single precision)
-    field_sorted = np.zeros((nyb*jprocs,
-                             nzb*kprocs,
-                             nxb*iprocs),
-                             dtype=np.float32)
-
-
-    #time1 = timeit.default_timer()
-    
-    # Sort the unsorted field
-    if debug:
-        print("reformat_FLASH_field: Beginning to sort field.")
-    for j in range(jprocs):
-        for k in range(kprocs):
-            for i in range(iprocs):
-                field_sorted[j*nyb:(j+1)*nyb,
-                             k*nzb:(k+1)*nzb,
-                             i*nxb:(i+1)*nxb, 
-                             ] = field[block_counter, :, :, :]
-                block_counter += 1
+    field_sorted = reformat_flash_field_numba(field, nxb, nyb, nzb, iprocs, jprocs, kprocs)
     
 
     # swap axes to get the correct orientation
