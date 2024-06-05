@@ -16,10 +16,13 @@
 # python dependencies
 import scipy.fft as fft
 import numpy as np
-from scipy.ndimage import uniform_filter
+from concurrent.futures import ThreadPoolExecutor
 
 # import derivative stencils
 from .derivatives import Derivative
+from .tensor_operations import TensorOperations
+from .vector_operations import VectorOperations
+from .scalar_operations import ScalarOperations
 
 ## ###############################################################
 ## Global variables
@@ -45,7 +48,9 @@ boundary_lookup = {0: 'periodic',
 ## Derived Variable Functions
 ## ###############################################################
 
-class DerivedVars:
+class DerivedVars(ScalarOperations,
+                  VectorOperations,
+                  TensorOperations):
     """
     Class for calculating derived variables from the magnetic field, velocity field, and density field.
     """
@@ -86,6 +91,12 @@ class DerivedVars:
         # create a derivative object to be shared globally
         self.d = Derivative(self.stencil,
                             self.L)
+        
+        # add the inherited classes
+        ScalarOperations.__init__(self)
+        VectorOperations.__init__(self,
+                                  self.num_of_dims)
+        TensorOperations.__init__(self)
         
         # Set the number of dimensions
         if self.num_of_dims == 3:
@@ -280,90 +291,46 @@ class DerivedVars:
             magnetic_vector_field)])
     
 
-    def gradient_tensor(self,
-                        vector_field : np.ndarray) -> np.ndarray:
+    def gradient_tensor(self, 
+                        vector_field: np.ndarray) -> np.ndarray:
         """
-        Compute the gradient tensor of a vector field 
-        using finite differences.
+        Compute the gradient tensor of a vector field using finite differences and
+        multiple threads.
         
         Author: James Beattie
 
         Args:
-            vector_field (np.ndarray)   : 3,N,N,N array of vector field, 
-                                            where 3 is the vector component and N is the number of grid 
-                                            points in each direction
+            vector_field (np.ndarray): 3,N,N,N array of vector field, 
+                                        where 3 is the vector component and N is the number of grid 
+                                        points in each direction
 
         Returns:
             gradient_tensor: the gradient tensor of the vector field, 
             \partial_i f_j
+        """
         
-        """
-   
-        # create the gradient tensor
-        if self.num_of_dims == 1:
-            # 1D
-            return np.einsum("ij...->ji...", 
-                            np.array([
-                                [self.d.gradient(vector_field[X],
-                                            gradient_dir       = coord,
-                                            boundary_condition = self.bcs[X]) 
-                                for coord in self.coords]]
-                                    )
-                            )
-        elif self.num_of_dims == 2:
-            # 2D
-            return np.einsum("ij...->ji...", 
-                            np.array([
-                                [self.d.gradient(vector_field[X],
-                                            gradient_dir       = coord,
-                                            boundary_condition = self.bcs[X]) 
-                                for coord in self.coords],
-                                [self.d.gradient(vector_field[Y],
-                                            gradient_dir       = coord,
-                                            boundary_condition = self.bcs[Y]) 
-                                for coord in self.coords]]
-                                    )
-                            )
-        elif self.num_of_dims == 3:
-            # 3D
-            return np.einsum("ij...->ji...", 
-                            np.array([
-                                [self.d.gradient(vector_field[X],
-                                            gradient_dir       = coord,
-                                            boundary_condition = self.bcs[X]) 
-                                for coord in self.coords],
-                                [self.d.gradient(vector_field[Y],
-                                            gradient_dir       = coord,
-                                            boundary_condition = self.bcs[Y]) 
-                                for coord in self.coords],
-                                [self.d.gradient(vector_field[Z],
-                                            gradient_dir        = coord,
-                                            boundary_condition  = self.bcs[Z]) 
-                                for coord in self.coords]]
-                                    )
-                            )
-            
+        # initialise the gradient tensor
+        grad_tensors = np.empty((self.num_of_dims, self.num_of_dims) + vector_field.shape[1:])
         
-    def smooth_gradient_tensor(self,
-                            gradient_tensor : np.ndarray, 
-                            smoothing_size : int          = 10) -> np.ndarray:
-        """
-        Smooth a gradient tensor field by averaging over adjacent cells.
+        # a single component of the gradient tensor
+        def compute_gradient(component_idx, coord):
+            return self.d.gradient(vector_field[component_idx], 
+                                   gradient_dir=coord, 
+                                   boundary_condition=self.bcs[component_idx])
 
-        Args:
-            gradient_tensor (np.ndarray)    : The gradient tensor to smooth (shape: 3,3,N,N,N).
-            smoothing_size (int)            : The size of the smoothing window (default: 10).
+        # compute the gradient tensor in parallel
+        with ThreadPoolExecutor() as executor:
+            futures = {}
+            for i in range(self.num_of_dims):
+                for j, coord in enumerate(self.coords):
+                    futures[(i, j)] = executor.submit(compute_gradient, i, coord)
 
-        Returns:
-            smoothed tensor field (np.ndarray) : The smoothed gradient tensor.
-        """
+            for (i, j), future in futures.items():
+                grad_tensors[i, j] = future.result()
 
-        return uniform_filter(gradient_tensor, 
-                            size  = smoothing_size, 
-                            axes  = (-3, -2, -1), 
-                            mode  = 'nearest')
-    
+        return self.tensor_transpose(grad_tensors)           
 
+        
     def orthogonal_tensor_decomposition(self,
                                         tensor_field : np.ndarray ) -> np.ndarray:
         """
@@ -397,13 +364,12 @@ class DerivedVars:
         """
         
         # transpose
-        tensor_transpose = np.einsum("ij... -> ji...",tensor_field)
-        
+        tensor_transpose = self.tensor_transpose(tensor_field)
         
         # bulk component
         tensor_bulk = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
-                                        np.einsum("ii...",tensor_field),
-                                        np.identity(self.num_of_dims))
+                                                        np.einsum("ii...",tensor_field),
+                                                        np.identity(self.num_of_dims))
         
         # symmetric component
         tensor_sym = 0.5 * (tensor_field + tensor_transpose) - tensor_bulk
@@ -505,139 +471,78 @@ class DerivedVars:
             
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
         
+        
+    def symmetric_eigvals(self, matrix, find_vectors = False):
+        """Finds the eigenvalues of a symmetric 3x3 matrix from https://hal.science/hal-01501221/document
 
-    def hermitian_eigenvalues(self,
-                              matrix : np.ndarray) -> np.ndarray:
+        Parameters
+        ----------
+        matrix : numpy ndarray shape (3,3,Nx,Ny,Nz)
+            must be a real symmetric 3x3 matrix defined pointwise in an arbitrary grid.
+        find_vectors : bool, optional
+            If True, the eigenvectors will be computed as well. Default is False to save computing time.
+
+        Returns
+        -------
+        eigenvalues : numpy ndarray shape (3,Nx, Ny,Nz)
+            array containing the three eigenvalues of the matrix, which will always be real for symmetric matrices. Is
+            sorted from smallest to largest.
+        eigenvectors : numpy ndarray shape (3,3, Nx, Ny, Nz)
+            array containing the eigenvectors of the matrix. Organized as rows in the matrix, first row corresponds to the
+            first eigenvalue and so on. Only returned if find_vectors is True.
+
         """
-        Compute the eigenvalues and eigenvectors of a 
-        hermitian tensor based on analyical relations in: https://hal.science/hal-01501221/document
-        
-        Author: James Beattie & Shashvat Varma
-        
-        Args:
-            matrix (np.ndarray): 3,3 matrix of the tensor field
-        
-        Returns:
-            eigenvalues (np.ndarray)    : 3 array of eigenvalues
-            zeta_1 (np.ndarray)         : 3 array of eigenvector 1
-            zeta_2 (np.ndarray)         : 3 array of eigenvector 2
-            zeta_3 (np.ndarray)         : 3 array of eigenvector 3
-        
-        """
-        
-        def phi(x_2, x_1):
-            if x_2 > 0:
-                return np.arctan( np.sqrt( 4*x_1**3 - x_2**2 ) / x_2 )
-            elif x_2 == 0.0:
-                return np.pi/2
-            elif x_2 < 0:
-                return np.arctan( np.sqrt( 4*x_1**3 - x_2**2 ) / x_2 ) + np.pi
-            
-        # Read the matrix into variables
-        a = matrix[0,0]; b = matrix[1,1]; c = matrix[2,2]
-        d = matrix[1,0]; f = matrix[2,0]; e = matrix[2,1]
-        d_star = matrix[0,1]; f_star = matrix[0,2]; e_star = matrix[1,2]
-        
-        # x_1 and x_2 coefficients for eigen values
-        x_1 = a**2 + b**2 + c**2 - a*d - a*c - b*c + 3 * ( np.abs(d)**2 + np.abs(f)**2 + np.abs(e)**2 )
-        x_2 = -( 2*a - b - c ) * ( 2*b - a - c ) * ( 2*c - a - b ) +\
-                9 * (  (2*c - a - b)*np.abs(d)**2 + ( 2*b - a - c )*np.abs(f)**2 + ( 2*a - b - c )*np.abs(e)**2  ) -\
-                54 * np.real(d_star*e_star*f_star)
-                            
-        # eigen values
-        lambda_1 = ( a + b + c - 2 * np.sqrt(x_1) * np.cos( phi(x_2, x_1)/3.0 ) ) / 3.0
-        lambda_2 = ( a + b + c + 2 * np.sqrt(x_1) * np.cos( (phi(x_2, x_1) - np.pi ) /3.0 ) ) / 3.0
-        lambda_3 = ( a + b + c + 2 * np.sqrt(x_1) * np.cos( (phi(x_2, x_1) + np.pi ) /3.0 ) ) / 3.0        
-                
-        # m coefficients for eigen vectors
-        m_1 = ( d * ( c - lambda_1 ) - e_star * f) / ( f * ( b - lambda_1) - d*e )
-        m_2 = ( d * ( c - lambda_2 ) - e_star * f) / ( f * ( b - lambda_2) - d*e )
-        m_3 = ( d * ( c - lambda_3 ) - e_star * f) / ( f * ( b - lambda_3) - d*e )
-        
-        # eigen vectors
-        zeta_1 = np.array([( lambda_1 - c - e * m_1 )/f, m_1 , 1])
-        zeta_2 = np.array([( lambda_2 - c - e * m_2 )/f, m_2 , 1])
-        zeta_3 = np.array([( lambda_3 - c - e * m_3 )/f, m_3 , 1])
-        
-        return np.array([lambda_1, lambda_2, lambda_3]), zeta_1, zeta_2, zeta_3
+    
+        #define the values of the matrix to be used in computations (NOTE: Assumes all values are real)
+        a = matrix[0,0,:,:,:]
+        b = matrix[1,1,:,:,:]
+        c = matrix[2,2,:,:,:]
+        d = matrix[0,1,:,:,:]
+        e = matrix[1,2,:,:,:]
+        f = matrix[0,2,:,:,:]
 
+        #begin the computations
+        x1 = a**2 + b**2 + c**2 - a*b - a*c - b*c+3*(d**2 + f**2 + e**2)
+        x2 = (-1)*(2*a-b-c)*(2*b-a-c)*(2*c-a-b) + 9*((2*c-a-b)*d**2 + (2*b-a-c)*f**2 + (2*a-b-c)*e**2) - 54*d*e*f
 
-    def tensor_outer_product(self,
-                             vector_field_0 : np.ndarray,
-                             vector_field_1 : np.ndarray) -> np.ndarray:
-        """
-        Compute the A_iB_j tensor field from a vector field.
-        
-        Author: James Beattie
-        
-        Args:
-            vector_field_0 (np.ndarray): 3,N,N,N array of vector field, where 
-            3 is the vector component and N is the number of grid points in each 
-            direction
-            vector_field_1 (np.ndarray): 3,N,N,N array of vector field, where 
-            3 is the vector component and N is the number of grid points in each 
-            direction
+        #define what phi is conditional to previous variables
+        condition_list = [x2>0, x2==0, x2<0]
+        choice_list = [np.arctan((np.sqrt(4*x1**3-x2**2))/(x2)), 
+                       np.pi/2, 
+                       np.arctan((np.sqrt(4*x1**3-x2**2))/(x2))+np.pi]
+        phi = np.select(condition_list, choice_list)
 
-        Returns:
-            A_i_B_j: the A_iB_j tensor field
-        
-        """
-            
-        return np.einsum('i...,j...->ij...',
-                         vector_field_0,
-                         vector_field_1)
+        #calculate the eigenvalues
+        sqrt_x1 = np.sqrt(x1)
+        lambda1 = (a+b+c-2*sqrt_x1*np.cos(phi/3))/3
+        lambda2 = (a+b+c+2*sqrt_x1*np.cos((phi-np.pi)/3))/3
+        lambda3 = (a+b+c+2*sqrt_x1*np.cos((phi+np.pi)/3))/3
+        eig_array = np.array([lambda1, lambda2, lambda3])
 
+        #perform the sort, saving indices of sort to use on eigenvectors later
+        idx = np.argsort(eig_array, axis=0)
+        eig_array = np.take_along_axis(eig_array, idx, axis=0)
+        
+        if find_vectors:
+            #compute the eigenvectors
+            m1 = (d*(c-lambda1) - e*f) / (f*(b-lambda1) - d*e)
+            m2 = (d*(c-lambda2) - e*f) / (f*(b-lambda2) - d*e)
+            m3 = (d*(c-lambda3) - e*f) / (f*(b-lambda3) - d*e)
 
-    def tensor_double_contraction(self,
-                           tensor_field_0 : np.ndarray,
-                           tensor_field_1 : np.ndarray) -> np.ndarray:
-        """
-        Compute the A_ijA_ij scalar field from a tensor field.
-        
-        Author: James Beattie
-        
-        Args:
-            tensor_field_0 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
-                                            (i,j) are the tensor components and N is the number of grid
-                                            points in each direction
-            tensor_field_1 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
-                                            (i,j) are the tensor components and N is the number of grid 
-                                            points in each direction
+            vec1 = [(lambda1 - c - e * m1)/f, m1, np.ones(np.shape(m1))]
+            vec2 = [(lambda2 - c - e * m2)/f, m2, np.ones(np.shape(m2))]
+            vec3 = [(lambda3 - c - e * m3)/f, m3, np.ones(np.shape(m3))]
+            vec_array = np.array([vec1, vec2, vec3])
 
-        Returns:
-            A_ijB_ij = a_11 b_11 + a_12 b_11 + ... a_nn b_nn: the contraction scalar field.
-        
-        """
-            
-        return np.einsum('ij...,ij...->...',
-                         tensor_field_0,
-                         tensor_field_1)
+            #do the corresponding sort on the vec array
+            vec_array[:,0,:,:,:] = np.take_along_axis(vec_array[:,0,:,:,:], idx, axis=0)
+            vec_array[:,1,:,:,:] = np.take_along_axis(vec_array[:,1,:,:,:], idx, axis=0)
+            vec_array[:,2,:,:,:] = np.take_along_axis(vec_array[:,2,:,:,:], idx, axis=0)
 
-    def vector_dot_tensor(self,
-                          vector_field : np.ndarray,
-                          tensor_field : np.ndarray) -> np.ndarray:
-        """
-        Compute the A_iA_j tensor field from a vector field.
+            return eig_array, vec_array
+        else:
+            return eig_array
         
-        Author: James Beattie
-        
-        Args:
-            vector (np.ndarray)         : i,N,N,N array of vector field, where 
-                                            i, are the vector components and N is the number of grid 
-                                            points in each direction
-            tensor_field_1 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
-                                            (i,j) are the tensor components and N is the number of grid
-                                            points in each direction
-
-        Returns:
-            A_iB_ij : a_1b_1j + a_2b_2j + ... contraction vector field.
-        
-        """
-            
-        return np.einsum('i...,ij...->j...',
-                         vector_field,
-                         tensor_field)
-
 
     def helmholtz_decomposition(self,
                                 vector_field : np.ndarray) -> np.ndarray:
@@ -794,109 +699,6 @@ class DerivedVars:
                          for coord in self.coords])
 
         
-    def vector_cross_product(self,
-                             vector_field_1 : np.ndarray,
-                             vector_field_2 : np.ndarray):
-        """
-        Compute the vector cross product of two vectors.
-        
-        Author: Neco Kriel & James Beattie
-
-        Args:
-            vector_field_1 (np.ndarray): 3,N,N,N array of vector field,
-                                    where 3 is the vector component and N is the number of grid
-                                    points in each direction
-            vector_field_2 (np.ndarray): 3,N,N,N array of vector field,
-                                    where 3 is the vector component and N is the number of grid
-                                    points in each direction
-
-        Returns:
-            vector_field_3 (np.ndarray): 3,N,N,N array of vector cross product of the two vectors
-        
-        """
-        
-        if self.num_of_dims == 1:
-            ValueError("Vector cross product is not defined for 1D.")
-        elif self.num_of_dims == 2:
-            return np.array([
-                0,
-                0,
-                vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]]
-                        )
-        elif self.num_of_dims == 3:
-            return np.array([
-                        vector_field_1[Y] * vector_field_2[Z] - vector_field_1[Z] * vector_field_2[Y],
-                        vector_field_1[Z] * vector_field_2[X] - vector_field_1[X] * vector_field_2[Z],
-                        vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]]
-                            )
-
-
-    def vector_dot_product(self,
-                           vector_field_1 : np.ndarray,
-                           vector_field_2 : np.ndarray):
-        """
-        Compute the vector dot product of two vectors.
-        
-        Author: Neco Kriel, James Beattie
-        
-        Args:
-            vector_field_1 (np.ndarray): 3,N,N,N array of vector field,
-                                    where 3 is the vector component and N is the number of grid
-                                    points in each direction    
-            vector_field_2 (np.ndarray): 3,N,N,N array of vector field,
-                                    where 3 is the vector component and N is the number of grid
-                                    points in each direction 
-
-        Returns:
-            vector dot product (np.ndarray): N,N,N array of vector cross product of the two vectors
-        
-        """
-        
-        return np.einsum("i...,i...->...",
-                         vector_field_1,
-                         vector_field_2)
-
-
-    def vector_magnitude(self,
-                         vector_field : np.ndarray) -> np.ndarray:
-        """
-        Compute the vector magnitude of a vector.
-        
-        Author: Neco Kriel
-        
-        Args:
-            vector_field (np.ndarray): 3,N,N,N array of vector field,
-                                        where 3 is the vector component and N is the number of grid
-                                        points in each direction
-
-        Returns:
-            vector mag (np.ndarray): N,N,N array of vector cross product of the two vectors
-        
-        """
-        vector_field = np.array(vector_field)
-        
-        return np.sqrt(self.vector_dot_product(vector_field,
-                                               vector_field))
-
-
-    def scalar_rms(self,
-                   scalar_field : np.ndarray) -> np.ndarray:
-        """
-        Compute the root-mean-squared of a scalar field.
-        
-        Author: Neco Kriel
-        
-        Args:
-            scalar_field (np.ndarray): N,N,N array of scalar field,
-                                        where N is the number of grid points in each direction  
-
-        Returns:
-            scalar_RMS (np.ndarray): scalar RMS of the scalar field
-        
-        """
-        return np.sqrt(np.mean(scalar_field**2))
-
-
     def scalar_laplacian(self,
                          scalar_field : np.ndarray) -> np.ndarray:
         """
