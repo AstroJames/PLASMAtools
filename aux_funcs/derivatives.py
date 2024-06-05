@@ -39,7 +39,7 @@ class Derivative:
         self.stencil = stencil
                 
         # Number of ghost cells
-        self.num_of_gcs = self.order // 2
+        self.num_of_gcs = self.stencil // 2
         
         # Grid properties
         self.L = L
@@ -89,8 +89,9 @@ class Derivative:
     
     
     def remove_ghost_cells(self, 
-                           scalar_field: np.ndarray,
-                           gradient_dir: int) -> np.ndarray:
+                           scalar_field         : np.ndarray,
+                           gradient_dir         : int,
+                           boundary_condition   : str) -> np.ndarray:
         """
         Remove ghost cells from the scalar field.
 
@@ -104,10 +105,12 @@ class Derivative:
             np.ndarray: the scalar field with ghost cells removed.
         """
         
-        slices               = [slice(None)] * scalar_field.ndim
-        slices[gradient_dir] = slice(self.num_of_gcs, -self.num_of_gcs)
-        
-        return scalar_field[tuple(slices)]
+        if boundary_condition == 'periodic':
+            return scalar_field
+        else:
+            slices               = [slice(None)] * scalar_field.ndim
+            slices[gradient_dir] = slice(self.num_of_gcs, -self.num_of_gcs)
+            return scalar_field[tuple(slices)]
     
     
     def compute_dr(self, shape, gradient_dir):
@@ -178,7 +181,8 @@ class Derivative:
                 return self.remove_ghost_cells(( 
                         np.roll(scalar_field,   F, axis=gradient_dir) \
                         - np.roll(scalar_field, B, axis=gradient_dir)) / (2. * dr), 
-                        gradient_dir)
+                        gradient_dir,
+                        boundary_condition)
             # four point stencil
             elif self.stencil == 4:
                 # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
@@ -188,7 +192,8 @@ class Derivative:
                         + 8*np.roll(scalar_field,     F, axis=gradient_dir)  \
                         - 8*np.roll(scalar_field,     B, axis=gradient_dir)  \
                         + np.roll(scalar_field,     2*B, axis=gradient_dir)) / (12. * dr), 
-                        gradient_dir)
+                        gradient_dir,
+                        boundary_condition)
             # six point stencil
             elif self.stencil == 6:
                 # df/dr = (-f(r+3dr) + 9f(r+2dr) - 45f(r+dr) + 45f(r-dr) - 9f(r-2dr) + f(r-3dr))/60dr
@@ -200,7 +205,8 @@ class Derivative:
                         + 45*np.roll(scalar_field,    F, axis=gradient_dir)  \
                         - 9*np.roll(scalar_field,   2*F, axis=gradient_dir) \
                         + np.roll(scalar_field,     3*F, axis=gradient_dir)) / (60. * dr), 
-                        gradient_dir)
+                        gradient_dir,
+                        boundary_condition)
             # eight point stencil
             elif self.stencil == 8:
                 # df/dr = (-f(r+4dr) + 12f(r+3dr) - 66f(r+2dr) + 192f(r+dr) - 192f(r-dr) + 66f(r-2dr) - 12f(r-3dr) + f(r-4dr))/280dr
@@ -214,7 +220,8 @@ class Derivative:
                             + 5 * np.roll(scalar_field, 2*B, axis=gradient_dir)
                             - 4 * np.roll(scalar_field, 3*B, axis=gradient_dir)
                             + np.roll(scalar_field,     4*B, axis=gradient_dir)) / (280. * dr), 
-                            gradient_dir)
+                            gradient_dir,
+                            boundary_condition)
 
         if derivative_order ==2:
             # two point stencil
@@ -223,7 +230,8 @@ class Derivative:
                     np.roll(scalar_field,   F, axis=gradient_dir) 
                     - 2 * scalar_field 
                     + np.roll(scalar_field, B, axis=gradient_dir)) / dr**2, 
-                    gradient_dir)
+                    gradient_dir,
+                    boundary_condition)
             # four point stencil
             elif self.stencil == 4:
                 return self.remove_ghost_cells((
@@ -232,7 +240,8 @@ class Derivative:
                     - 30 * scalar_field
                     + 16 * np.roll(scalar_field, B, axis=gradient_dir)
                     - np.roll(scalar_field,    2*B, axis=gradient_dir)) / (12. * dr**2), 
-                    gradient_dir)
+                    gradient_dir,
+                    boundary_condition)
             # six point stencil
             elif self.stencil == 6:
                 return self.remove_ghost_cells((
@@ -243,7 +252,8 @@ class Derivative:
                 + 270 * np.roll(scalar_field,   B,  axis=gradient_dir)
                 - 27 * np.roll(scalar_field,  2*B,  axis=gradient_dir)
                 + 2 * np.roll(scalar_field,   3*B,  axis=gradient_dir)) / (180 * dr**2),
-                gradient_dir) 
+                gradient_dir,
+                boundary_condition) 
             # eight point stencil
             elif self.stencil == 8:
                 return self.remove_ghost_cells((
@@ -256,4 +266,5 @@ class Derivative:
                     - 1008 * np.roll(scalar_field,  2*B, axis=gradient_dir)
                     + 128 * np.roll(scalar_field,   3*B, axis=gradient_dir)
                     - 9 * np.roll(scalar_field,     4*B, axis=gradient_dir)) / (5040. * dr**2),
-                    gradient_dir)
+                    gradient_dir,
+                    boundary_condition)
