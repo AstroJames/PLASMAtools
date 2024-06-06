@@ -4,6 +4,11 @@ import numpy as np
 X,Y,Z = 0,1,2
 
 class VectorOperations:
+    """
+    A class to perform operations on vector fields.
+    
+    """
+    
     def __init__(self,
                  num_of_dims    : int      = 3):
         

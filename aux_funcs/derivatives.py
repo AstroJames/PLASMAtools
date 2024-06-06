@@ -18,6 +18,8 @@ class Derivative:
     This class provides methods for computing the first and second
     derivatives of a scalar field using finite differences.
     
+    Author: James Beattie
+    
     """
     
     def __init__(self, 
@@ -209,7 +211,8 @@ class Derivative:
                         boundary_condition)
             # eight point stencil
             elif self.stencil == 8:
-                # df/dr = (-f(r+4dr) + 12f(r+3dr) - 66f(r+2dr) + 192f(r+dr) - 192f(r-dr) + 66f(r-2dr) - 12f(r-3dr) + f(r-4dr))/280dr
+                # df/dr = (-f(r+4dr) + 12f(r+3dr) - 66f(r+2dr) + 192f(r+dr) - 192f(r-dr) + 
+                # 66f(r-2dr) - 12f(r-3dr) + f(r-4dr))/280dr
                 # and remove the ghost cells in 3D and return the gradient
                 return self.remove_ghost_cells((
                             -np.roll(scalar_field,      4*F, axis=gradient_dir)
@@ -225,6 +228,7 @@ class Derivative:
 
         if derivative_order ==2:
             # two point stencil
+            # d^2 f / dr^2 = (f(r+dr) - 2f(r) + f(r-dr))/dr^2
             if self.stencil == 2:
                 return self.remove_ghost_cells((
                     np.roll(scalar_field,   F, axis=gradient_dir) 
@@ -233,6 +237,8 @@ class Derivative:
                     gradient_dir,
                     boundary_condition)
             # four point stencil
+            # d^2 f / dr^2 = (-f(r+4dr) + 16f(r+3dr) - 30f(r+2dr) + 16f(r+dr) - 30f(r) + 
+            # 16f(r-dr) - 30f(r-2dr) + 16f(r-3dr) - f(r-4dr))/12dr^2
             elif self.stencil == 4:
                 return self.remove_ghost_cells((
                     - np.roll(scalar_field,    2*F, axis=gradient_dir)
@@ -243,6 +249,8 @@ class Derivative:
                     gradient_dir,
                     boundary_condition)
             # six point stencil
+            # d^2 f / dr^2 = (-2f(r+3dr) + 27f(r+2dr) - 270f(r+dr) + 490f(r) 
+            # - 270f(r-dr) + 27f(r-2dr) - 2f(r-3dr))/180dr^2
             elif self.stencil == 6:
                 return self.remove_ghost_cells((
                     2 * np.roll(scalar_field, 3*F,  axis=gradient_dir)
@@ -255,6 +263,8 @@ class Derivative:
                 gradient_dir,
                 boundary_condition) 
             # eight point stencil
+            # d^2 f / dr^2 = (-9f(r+4dr) + 128f(r+3dr) - 1008f(r+2dr) + 8064f(r+dr) - 14350f(r)
+            # + 8064f(r-dr) - 1008f(r-2dr) + 128f(r-3dr) - 9f(r-4dr))/5040dr^2
             elif self.stencil == 8:
                 return self.remove_ghost_cells((
                     - 9 * np.roll(scalar_field,     4*F, axis=gradient_dir)

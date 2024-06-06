@@ -2,6 +2,10 @@ import numpy as np
 from scipy.ndimage import uniform_filter
 
 class TensorOperations:
+    """
+    A class to perform operations on tensor fields.
+    
+    """
     def __init__(self):
         pass
 

@@ -1,7 +1,13 @@
 import numpy as np
 
-
 class ScalarOperations:
+    """
+    A class to perform operations on scalar fields.
+    
+    Author: James Beattie
+    
+    """
+    
     def __init__(self):
         pass
 
