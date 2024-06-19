@@ -6,7 +6,7 @@ class TensorOperations:
     A class to perform operations on tensor fields.
     
     """
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def tensor_magnitude(self,

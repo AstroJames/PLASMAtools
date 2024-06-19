@@ -10,7 +10,13 @@ class VectorOperations:
     """
     
     def __init__(self,
-                 num_of_dims    : int      = 3):
+                 num_of_dims    : int      = 3) -> None:
+        """
+        Init method for the VectorOperations class.
+
+        Args:
+            num_of_dims (int, optional): _description_. Defaults to 3.
+        """
         
         # Number of dimensions
         self.num_of_dims = num_of_dims

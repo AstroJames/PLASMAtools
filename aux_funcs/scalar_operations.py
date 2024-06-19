@@ -8,7 +8,7 @@ class ScalarOperations:
     
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def scalar_rms(self,
