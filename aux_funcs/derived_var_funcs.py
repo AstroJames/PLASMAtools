@@ -17,6 +17,15 @@
 import scipy.fft as fft
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+try: 
+    import pyfftw
+    pyfftw_import = True
+    pyfftw.interfaces.cache.enable()
+    threads = multiprocessing.cpu_count()
+except ImportError:
+    print("pyfftw not installed, using scipy's serial fft")
+pyfftw_import = False
 
 # import derivative stencils
 from .derivatives import Derivative
@@ -29,7 +38,7 @@ from .scalar_operations import ScalarOperations
 ## ###############################################################
 
 # indexes
-X,Y,Z = 0,1,2
+X,Y,Z = 0, 1, 2
 
 # TODO: make consistent throughout library:
 # scalar fields : 1,N,N,N   (i, x, y, z)
@@ -182,9 +191,16 @@ class DerivedVars(ScalarOperations,
         """
         
         # Take FFT of vector field
-        vector_field_FFT = fft.fftn(vector_field,
-                                    norm='forward',
-                                    axes=(1,2,3))
+        if pyfftw_import:
+            vector_field_FFT = pyfftw.builders.fftn(vector_field,
+                                                    axes        = (1,2,3),
+                                                    norm        = 'forward',
+                                                    threads     = threads)
+            vector_field_FFT = vector_field_FFT()
+        else:
+            vector_field_FFT = fft.fftn(vector_field,
+                                        norm='forward',
+                                        axes=(1,2,3))
 
         # Assuming a cubic domain    
         N = vector_field.shape[1]  
@@ -208,10 +224,17 @@ class DerivedVars(ScalarOperations,
         
         # Take the cross product of k and the vector field
         # Take the inverse FFT to get the vector potential
-        a = np.real(fft.ifftn(1j * self.vector_cross_product(k,
-                                                             vector_field_FFT) / k_norm**2, 
-                              axes=(1, 2, 3),
-                              norm="forward"))
+        if pyfftw_import:
+            a = np.real(pyfftw.builders.ifftn(1j * self.vector_cross_product(k,
+                                                                            vector_field_FFT) / k_norm**2, 
+                                              axes=(1, 2, 3),
+                                              threads=threads,
+                                              norm='forward'))
+        else:
+            a = np.real(fft.ifftn(1j * self.vector_cross_product(k,
+                                                                vector_field_FFT) / k_norm**2, 
+                                axes=(1, 2, 3),
+                                norm="forward"))
         
         # Take the curl of the vector potential to get the reconstructed magnetic field
         # for debuging
@@ -332,7 +355,11 @@ class DerivedVars(ScalarOperations,
 
         
     def orthogonal_tensor_decomposition(self,
-                                        tensor_field : np.ndarray ) -> np.ndarray:
+                                        tensor_field    : np.ndarray,
+                                        sym             : bool = True,
+                                        asym            : bool = False,
+                                        bulk            : bool = False,
+                                        all             : bool = False ) -> np.ndarray:
         """
         Compute the symmetric, anti-symmetric and bulk components of a rank 2 tensor field.
         
@@ -363,21 +390,26 @@ class DerivedVars(ScalarOperations,
             tensor_bulk (np.ndarray): M,M,N,N,N array of trace tensor field.
         """
         
-        # transpose
-        tensor_transpose = self.tensor_transpose(tensor_field)
-        
         # bulk component
-        tensor_bulk = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
-                                                        np.einsum("ii...",tensor_field),
-                                                        np.identity(self.num_of_dims))
+        if sym or bulk or all:
+            tensor_bulk = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
+                                                            np.einsum("ii...",tensor_field),
+                                                            np.identity(self.num_of_dims))
         
         # symmetric component
-        tensor_sym = 0.5 * (tensor_field + tensor_transpose) - tensor_bulk
+        if sym:
+            return 0.5 * (tensor_field + self.tensor_transpose(tensor_field)) - tensor_bulk
         
         # anti-symmetric component
-        tensor_anti = 0.5 * (tensor_field - tensor_transpose)
+        if asym:
+            return 0.5 * (tensor_field - self.tensor_transpose(tensor_field))
         
-        return tensor_sym, tensor_anti, tensor_bulk
+        if bulk:
+            return tensor_bulk
+        
+        if all:
+            tensor_transpose = self.tensor_transpose(tensor_field)
+            return 0.5 * (tensor_field + tensor_transpose) - tensor_bulk, 0.5 * (tensor_field - tensor_transpose), tensor_bulk
 
 
     def vorticity_decomp(self,
@@ -471,57 +503,72 @@ class DerivedVars(ScalarOperations,
             
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
         
+    
+    def symmetric_eigvals(self, 
+                          tensor_field : np.ndarray, 
+                          find_vectors : bool = False) -> np.ndarray:
+        """
         
-    def symmetric_eigvals(self, matrix, find_vectors = False):
-        """Finds the eigenvalues of a symmetric 3x3 matrix from https://hal.science/hal-01501221/document
+        Finds the eigenvalues of a symmetric 3x3 matrix from https://hal.science/hal-01501221/document
+
+        Authors: Shashvat Varma, James Beattie
 
         Parameters
         ----------
-        matrix : numpy ndarray shape (3,3,Nx,Ny,Nz)
-            must be a real symmetric 3x3 matrix defined pointwise in an arbitrary grid.
+        matrix       : numpy ndarray shape (3,3,Nx,Ny,Nz)
+                        must be a real symmetric 3x3 matrix defined pointwise in an arbitrary grid.
         find_vectors : bool, optional
-            If True, the eigenvectors will be computed as well. Default is False to save computing time.
+                        If True, the eigenvectors will be computed as well. 
+                        Default is False to save computing time.
 
         Returns
         -------
         eigenvalues : numpy ndarray shape (3,Nx, Ny,Nz)
-            array containing the three eigenvalues of the matrix, which will always be real for symmetric matrices. Is
-            sorted from smallest to largest.
+                        array containing the three eigenvalues of the matrix, which will always be real for symmetric matrices. Is
+                        sorted from smallest to largest.
         eigenvectors : numpy ndarray shape (3,3, Nx, Ny, Nz)
-            array containing the eigenvectors of the matrix. Organized as rows in the matrix, first row corresponds to the
-            first eigenvalue and so on. Only returned if find_vectors is True.
+                        array containing the eigenvectors of the matrix. Organized as rows in the matrix, first row corresponds to the
+                        first eigenvalue and so on. Only returned if find_vectors is True.
 
         """
     
         #define the values of the matrix to be used in computations (NOTE: Assumes all values are real)
-        a = matrix[0,0,:,:,:]
-        b = matrix[1,1,:,:,:]
-        c = matrix[2,2,:,:,:]
-        d = matrix[0,1,:,:,:]
-        e = matrix[1,2,:,:,:]
-        f = matrix[0,2,:,:,:]
+        assert tensor_field.shape[0] == 3 and tensor_field.shape[1] == 3, "Matrix must be 3x3"
+        #make sure tensor is symmetric
+        assert np.allclose(tensor_field, self.tensor_transpose(tensor_field)), "Matrix must be symmetric"
+        
+        a = tensor_field[0,0,:,:,:]
+        b = tensor_field[1,1,:,:,:]
+        c = tensor_field[2,2,:,:,:]
+        d = tensor_field[0,1,:,:,:]
+        e = tensor_field[1,2,:,:,:]
+        f = tensor_field[0,2,:,:,:]
 
         #begin the computations
         x1 = a**2 + b**2 + c**2 - a*b - a*c - b*c+3*(d**2 + f**2 + e**2)
-        x2 = (-1)*(2*a-b-c)*(2*b-a-c)*(2*c-a-b) + 9*((2*c-a-b)*d**2 + (2*b-a-c)*f**2 + (2*a-b-c)*e**2) - 54*d*e*f
+        x2 = (-1)*(2*a-b-c)*(2*b-a-c)*(2*c-a-b) + \
+                9*((2*c-a-b)*d**2 + (2*b-a-c)*f**2 + (2*a-b-c)*e**2) - 54*d*e*f
 
         #define what phi is conditional to previous variables
-        condition_list = [x2>0, x2==0, x2<0]
-        choice_list = [np.arctan((np.sqrt(4*x1**3-x2**2))/(x2)), 
-                       np.pi/2, 
-                       np.arctan((np.sqrt(4*x1**3-x2**2))/(x2))+np.pi]
-        phi = np.select(condition_list, choice_list)
+        condition_list  = [x2>0, x2==0, x2<0]
+        choice_list     = [np.arctan((np.sqrt(4*x1**3-x2**2))/(x2)), 
+                           np.pi/2, 
+                           np.arctan((np.sqrt(4*x1**3-x2**2))/(x2))+np.pi]
+        phi             = np.select(condition_list, choice_list)
 
         #calculate the eigenvalues
-        sqrt_x1 = np.sqrt(x1)
-        lambda1 = (a+b+c-2*sqrt_x1*np.cos(phi/3))/3
-        lambda2 = (a+b+c+2*sqrt_x1*np.cos((phi-np.pi)/3))/3
-        lambda3 = (a+b+c+2*sqrt_x1*np.cos((phi+np.pi)/3))/3
-        eig_array = np.array([lambda1, lambda2, lambda3])
+        sqrt_x1     = np.sqrt(x1)
+        lambda1     = (a+b+c-2*sqrt_x1*np.cos(phi/3))/3
+        lambda2     = (a+b+c+2*sqrt_x1*np.cos((phi-np.pi)/3))/3
+        lambda3     = (a+b+c+2*sqrt_x1*np.cos((phi+np.pi)/3))/3
+        eig_array   = np.array([lambda1, lambda2, lambda3])
 
         #perform the sort, saving indices of sort to use on eigenvectors later
-        idx = np.argsort(eig_array, axis=0)
-        eig_array = np.take_along_axis(eig_array, idx, axis=0)
+        idx         = np.argsort(eig_array,
+                                 axis=0)
+        eig_array   = np.take_along_axis(eig_array, 
+                                         idx, 
+                                         axis=0)
         
         if find_vectors:
             #compute the eigenvectors
@@ -529,10 +576,12 @@ class DerivedVars(ScalarOperations,
             m2 = (d*(c-lambda2) - e*f) / (f*(b-lambda2) - d*e)
             m3 = (d*(c-lambda3) - e*f) / (f*(b-lambda3) - d*e)
 
-            vec1 = [(lambda1 - c - e * m1)/f, m1, np.ones(np.shape(m1))]
-            vec2 = [(lambda2 - c - e * m2)/f, m2, np.ones(np.shape(m2))]
-            vec3 = [(lambda3 - c - e * m3)/f, m3, np.ones(np.shape(m3))]
+            vec1 = [(lambda1 - c - e * m1) / f, m1, np.ones(np.shape(m1))]
+            vec2 = [(lambda2 - c - e * m2) / f, m2, np.ones(np.shape(m2))]
+            vec3 = [(lambda3 - c - e * m3) / f, m3, np.ones(np.shape(m3))]
             vec_array = np.array([vec1, vec2, vec3])
+
+            del m1, m2, m3, vec1, vec2, vec3
 
             #do the corresponding sort on the vec array
             vec_array[:,0,:,:,:] = np.take_along_axis(vec_array[:,0,:,:,:], idx, axis=0)
@@ -570,8 +619,17 @@ class DerivedVars(ScalarOperations,
                             self.L/2.0,
                             vector_field.shape[0]) # assuming a domian of [-L/2, L/2]
         
-        # Fourier transform to Fourier space    
-        Fhat = fft.fftn(vector_field, axes=(0, 1, 2),norm = 'forward')
+        # Fourier transform to Fourier space  
+        if pyfftw_import:
+            Fhat = pyfftw.builders.fftn(vector_field,
+                                        axes=(0, 1, 2),
+                                        direction='FFTW_BACKWARD',
+                                        threads=threads)
+            Fhat = Fhat()
+        else:    
+            Fhat = fft.fftn(vector_field,
+                            axes=(0, 1, 2),
+                            norm = 'forward')
         
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
         Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
@@ -595,8 +653,24 @@ class DerivedVars(ScalarOperations,
         Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
         
         # Inverse Fourier transform to real space
-        F_irrot = fft.ifftn(Fhat_irrot, axes=(X,Y,Z),norm = 'forward').real
-        F_solen = fft.ifftn(Fhat_solen, axes=(X,Y,Z),norm = 'forward').real
+        if pyfftw_import:
+            F_irrot = pyfftw.builders.ifftn(Fhat_irrot,
+                                            axes=(0, 1, 2),
+                                            threads=threads,
+                                            direction='FFTW_FORWARD')
+            F_solen = pyfftw.builders.ifftn(Fhat_solen,
+                                            axes=(0, 1, 2),
+                                            threads=threads,
+                                            direction='FFTW_FORWARD')
+            F_irrot = np.real(F_irrot())
+            F_solen = np.real(F_solen())
+        else:            
+            F_irrot = fft.ifftn(Fhat_irrot,
+                                axes=(X,Y,Z),
+                                norm = 'forward').real
+            F_solen = fft.ifftn(Fhat_solen,
+                                axes=(X,Y,Z),
+                                norm = 'forward').real
         
         # Remove numerical noise
         # threshold = 1e-16
@@ -869,9 +943,12 @@ class DerivedVars(ScalarOperations,
             
             return np.arctan( np.sqrt(ratio**2-1) )
         
+        # compute vector potential
+        a = self.vector_potential(vector_field)
+        
         # Compute jacobian of B field
         self.set_stencil(6)
-        jacobian = self.gradient_tensor(vector_field)
+        jacobian = self.gradient_tensor(a)
         self.set_stencil(2)
         
         # Make jacobian traceless (numerical errors will result in some trace, which is
@@ -899,11 +976,9 @@ class DerivedVars(ScalarOperations,
         M_12 = trans_jacobian[0,1,...]
         M_21 = trans_jacobian[1,0,...]
         M_22 = trans_jacobian[1,1,...]
-        M    = np.array([[M_11, M_12],
-                        [M_21, M_22]])
         
         # Compute trace and determinant of M
-        trace_M = np.einsum("ii...",M)
+        trace_M = M_11 + M_22
         det_M   = M_11 * M_22 - M_12 * M_21
         
         # Characteristic equation
@@ -944,16 +1019,17 @@ class DerivedVars(ScalarOperations,
             Returns:
                 classification_array (np.ndarray): 3D array of the critical point types
             """
-            
-            is_3D = np.abs(trace_M) > 0.0
-            is_2D = np.isclose(trace_M,0.0)
-            is_real_eig = np.abs(J_3) < J_thresh
-            is_imag_eig = np.abs(J_3) > J_thresh
-            is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
-                
             # real and imaginary components of the eigenvalues
             eig1_real = np.real(eig_1)
             eig2_real = np.real(eig_2)
+            
+            is_3D = np.abs(trace_M) > 0.0
+            is_2D = np.isclose(trace_M,0.0,1e-3)
+            is_real_eig = np.abs(J_3) < 1.1*J_thresh
+            is_imag_eig = np.abs(J_3) > 1.1*J_thresh
+            # is_real_eig = np.isclose(np.real(eig_1),0.0,atol=1e-1) & np.isclose(np.real(eig_2),0.0,atol=1e-1)
+            # is_imag_eig = (is_real_eig == False)
+            is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
             
             # array initialisation to store each of the 9 critical point types
             classification_array = np.repeat(np.zeros_like(trace_M)[np.newaxis,...],
