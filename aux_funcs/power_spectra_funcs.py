@@ -13,12 +13,21 @@
 
 import numpy.fft as fft
 import numpy as np
+import multiprocessing
+try: 
+    import pyfftw
+    pyfftw_import = True
+    pyfftw.interfaces.cache.enable()
+    threads = multiprocessing.cpu_count()
+except ImportError:
+    print("pyfftw not installed, using scipy's serial fft")
+pyfftw_import = False
 
 ## ###############################################################
 ## Spectral Functions
 ## ###############################################################
 
-def compute_power_spectrum_3D(volume: np.ndarray) -> np.ndarray:
+def compute_power_spectrum_3D(field: np.ndarray) -> np.ndarray:
     """
     Computes the power spectrum of a 3D scalar field. Note the norm = "forward" 
     in the Fourier transform. This means that the power spectrum will be scaled by
@@ -32,16 +41,28 @@ def compute_power_spectrum_3D(volume: np.ndarray) -> np.ndarray:
         power_spectrum_3D (np.ndarray): 3D power spectrum of the input volume
     """
     
+    # the field should be i,N,N,N
+    assert len(field.shape) == 4, "Field should be 3D"
+    
     # Compute the 3D Fourier Transform
-    ft = np.fft.fftn(volume, norm='forward')
+    if pyfftw_import:
+        ft = pyfftw.builders.fftn(field,
+                                  axes        = (1,2,3),
+                                  direction   = 'FFTW_BACKWARD',
+                                  threads     = threads)
+        
+    else:
+        ft = np.fft.fftn(field,
+                         axes=(1, 2, 3),
+                         norm='forward')
     
     # Shift zero frequency component to center
-    ft = np.fft.fftshift(ft)
-    
-    # Compute the 3D power spectrum
-    power_spectrum_3D = np.abs(ft)**2
-    
-    return power_spectrum_3D
+    ft = np.fft.fftshift(ft,
+                         axes=(1, 2, 3))
+
+    # Compute the 3D power spectra    
+    return np.sum(np.abs(ft)**2,
+                  axis=0)
 
 def spherical_integrate(data: np.ndarray, 
                         bins: int = None) -> tuple:
@@ -149,8 +170,8 @@ def cylindrical_integrate(data: np.ndarray,
     # Ensure that the length matches the expected size
     cylindrical_sum = cylindrical_sum[:bins_perp * bins_para]
     cylindrical_sum = cylindrical_sum.reshape((bins_perp, bins_para))
-    k_perp_modes = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
-    k_para_modes = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
+    k_perp_modes    = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
+    k_para_modes    = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
 
     return k_perp_modes, k_para_modes, cylindrical_sum
 
