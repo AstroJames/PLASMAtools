@@ -1,8 +1,5 @@
 import numpy as np
 
-# indexes
-X, Y, Z = 0, 1, 2
-
 # shifts for derivatives
 F = -1  # shift forwards
 B = +1  # shift backwards
