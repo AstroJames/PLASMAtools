@@ -24,7 +24,8 @@ try:
     pyfftw.interfaces.cache.enable()
     threads = multiprocessing.cpu_count()
 except ImportError:
-    print("pyfftw not installed, using scipy's serial fft")
+    pass
+    #print("pyfftw not installed, using scipy's serial fft")
 pyfftw_import = False
 
 # import derivative stencils
