@@ -365,9 +365,9 @@ class Fields():
             # setting the read in states here (this adds an attribute)
             if field_lookup_type[field_str] == "scalar":
                 g = File(self.filename, 'r')
-                print(f"Reading in grid attribute: {field_str}")
+                #print(f"Reading in grid attribute: {field_str}")
                 if self.reformat:
-                    print(f"Reading in reformatted grid attribute: {field_str}")
+                    #print(f"Reading in reformatted grid attribute: {field_str}")
                     setattr(self, field_str, 
                             np.array([reformat_FLASH_field(g[field_str][:,:,:,:],
                                                  self.nxb,
@@ -384,7 +384,7 @@ class Fields():
             elif field_lookup_type[field_str] == "vector":
                 g = File(self.filename, 'r')
                 for coord in ["x","y","z"]:
-                    print(f"Reading in grid attribute: {field_str}{coord}")
+                    #print(f"Reading in grid attribute: {field_str}{coord}")
                     if self.reformat: # if reformatting is required
                         #time1 = timeit.default_timer()
                         field_var = reformat_FLASH_field(g[f"{field_str}{coord}"][:,:,:,:],
@@ -395,7 +395,7 @@ class Fields():
                                                          self.int_properties["jprocs"],
                                                          self.int_properties["kprocs"],
                                                          debug)
-                        print(f"Reading in reformatted grid attribute: {field_str}{coord}")
+                        #print(f"Reading in reformatted grid attribute: {field_str}{coord}")
                         #time2 = timeit.default_timer()
                         #print(f"The total time it took is: {time2-time1}")
                         if vector_magnitude: # if the mag is required, add and accumulate the square of the components
