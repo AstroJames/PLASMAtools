@@ -12,7 +12,7 @@ import numpy as np
 try:
     from numba import njit, prange
     NUMBA_AVAILABLE = True
-    print("Utilising numba for I/O.")
+    #print("Utilising numba for I/O.")
 except ImportError:
     NUMBA_AVAILABLE = False
     
