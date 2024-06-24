@@ -23,6 +23,9 @@ from .read_RAMSES   import  reformat_RAMSES_field
 ## Global variabes
 ## ###############################################################
 
+#Define the DerivedVar class
+dvar = dvf.DerivedVars()
+
 field_lookup_type = {
     "dens"      : "scalar",
     "dvvl"      : "scalar",
@@ -518,7 +521,8 @@ class Fields():
                     field_str: str,
                     eta: float      = 0.0,
                     nu: float       = 0.0,
-                    n_workers: int  = 1) -> None:
+                    n_workers: int  = 1,
+                    debug :bool     = False) -> None:
         """
         General function for adding derived variables to the data object,
         rather than having to derive them in the aux funcs script.
@@ -530,23 +534,25 @@ class Fields():
         # so you can just call them with .derived_var("E"), etc.
         var_lookup_table = {
             "E"            : ["Ex","Ey","Ez"],                   # electric field
-            "Exb"          : ["Exbx","Exby","Exbz"],             # reconnection inflow velocity
+            "ExB"          : ["Exbx","Exby","Exbz"],             # reconnection inflow velocity
             "uxb"          : ["uxbx","uxby","uxbz"],             # induction
             "helmholtz"    : ["vel_comx","vel_comy","vel_comz",  # helmholtz decomp.
                               "vel_solx","vel_soly","vel_solz"], # 
             "cur"          : ["curx","cury","curz"],             # current
             "jxb"          : ["jxbx","jxby","jxbz"],             # lorentz force
             "jdotb"        : ["jdotb"],                          # current dot magnetic field 
-            "tens"         : ["tensx","tensy","tensz"]           # magnetic tension
+            "tens"         : ["tensx","tensy","tensz"],          # magnetic tension
+            "visc_diss"    : ["visc_diss"]                       # viscous dissipation
         }
 
         # throw an error if the derived var doesn't exist
-        print(field_str)
+        if debug:
+            print(field_str)
         if field_str not in var_lookup_table:
             raise Exception(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
 
-        
-        print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
+        if debug:
+            print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
         # grid data attributes
         # if the data is going to be reformated, preallocate the 3D
         # arrays for the grid data
@@ -569,22 +575,23 @@ class Fields():
         # Defn: the current density
         # assuming \mu_0 = 4\pi for current
         if field_str == "cur":
-            print(f"derived_var: Calculating current density.")
+            if debug:
+                print(f"derived_var: Calculating current density.")
             
             if not self.read_mag:
                 self.read("mag")
                 
-            cur = dvf.vector_curl([self.magx, self.magy, self.magz]) / (self.mu0)
+            cur = dvar.vector_curl(self.mag) / (self.mu0)
             
             # write the new variable to the object
-            for idx, coord in enumerate(["x","y,","z"]):
-                setattr(self, f"cur{coord}", cur[idx])  
+            setattr(self, f"cur", cur)
             
             
         # Defn: jxb (Lorentz force)
         # assuming \mu_0 = 4\pi for current
         if field_str == "jxb":
-            print(f"derived_var: Calculating Lorentz force.")
+            if debug:
+                print(f"derived_var: Calculating Lorentz force.")
             
             # make sure these fields have been read in
             if not self.read_mag:
@@ -592,21 +599,17 @@ class Fields():
             if not self.derived_cur:
                 self.derived_var("cur")       
                                          
-            jxb = dvf.vectorCrossProduct([self.curx,
-                                            self.cury,
-                                            self.curz],
-                                            [self.magx,
-                                            self.magy,
-                                            self.magz]) 
+            jxb = dvar.vector_cross_product(self.cur,
+                                            self.mag) 
             
             # write the new variable to the object
-            for idx, coord in enumerate(["x","y,","z"]):
-                setattr(self, f"jxb{coord}", jxb[idx])       
+            setattr(self, f"jxb", jxb)     
         
         
         # Defn: induction
         if field_str == "uxb" or field_str == "E" or field_str == "ExB":
-            print("derived_var: Calculating the induction.")
+            if debug:
+                print("derived_var: Calculating the induction.")
             
             # make sure these fields have been read in
             if not self.read_mag:
@@ -614,23 +617,19 @@ class Fields():
             if not self.read_vel:
                 self.read("vel")   
         
-            uxb = dvf.vector_cross_product([self.velx,
-                                            self.vely,
-                                            self.velz],
-                                           [self.magx,
-                                            self.magy,
-                                            self.magz])
+            uxb = dvar.vector_cross_product(self.vel,
+                                           self.mag)
                   
             if field_str == "uxb":
                 # write the new variable to the object
-                for idx, coord in enumerate(["x","y","z"]):
-                    setattr(self, f"uxb{coord}", uxb[idx])           
+                setattr(self, f"uxb", uxb)       
 
             
         # Defn: electric field (non ideal if \eta =/= 0)
         # assuming \mu_0 = 4\pi for current
         if field_str == "E" or field_str == "ExB":
-            print(f"derived_var: Calculating E field.")
+            if debug:
+                print(f"derived_var: Calculating E field.")
 
             # make sure these fields have been read in
             if not self.read_vel:
@@ -644,60 +643,60 @@ class Fields():
                 Warning(f"derived_var: eta is 0.0. Only ideal E field will be computed.")
             
             # calculate the new variable (non-ideal electric field)
-            E = eta * np.array([self.curx,self.cury,self.curz]) - uxb 
+            E = eta * np.array(self.cur) - uxb 
 
             if field_str == "E":
                 # write the new variable to the object
-                for idx, coord in enumerate(["x","y","z"]):
-                    setattr(self, f"E{coord}", E[idx])  
+                setattr(self, f"E", E)
             
 
         # Defn: the electric field cross the magnetic field for computing 
         # inflow velocities for reconnection problems.5
-        if field_str == "Exb":
-            print(f"derived_var: Calculating Exb field.")
+        if field_str == "ExB":
+            if debug:
+                print(f"derived_var: Calculating Exb field.")
             
             # make sure these fields have been read in
             if not self.read_mag:
                 self.read("mag")
             
-            Exb = dvf.vector_cross_product(E,
-                                           [self.magx,self.magy,self.magz])
+            Exb = dvar.vector_cross_product(E,
+                                           self.mag)
             
             # write the new variable to the object
-            for idx, coord in enumerate(["x","y","z"]):
-                setattr(self, f"Exb{coord}", Exb[idx])  
+            setattr(self, f"ExB", Exb)
             
         
         # Defn: the helmholtz decomposition of the velocity field                                    
         if field_str == "helmholtz":
-            print(f"derived_var: Calculating Helmholtz decomp of v.")
+            if debug:
+                print(f"derived_var: Calculating Helmholtz decomp of v.")
 
             # make sure these fields have been read in
             if not self.read_vel:
                 self.read("vel")
             
             # initialize the velocity cube
-            vel_cube = np.zeros((self.velx.shape[0],self.velx.shape[1],self.velx.shape[2],3))
+            vel_cube = np.zeros((self.vel[0].shape[0],self.vel[0].shape[1],self.vel[0].shape[2],3))
             
             # add to the cube (note that this is a 4D array, with component
             # in the last dimension -- inconsistent with the rest of the tools)
-            vel_cube[..., 0] = self.velx
-            vel_cube[..., 1] = self.vely
-            vel_cube[..., 2] = self.velz 
+            vel_cube[..., 0] = self.vel[0]
+            vel_cube[..., 1] = self.vel[1]
+            vel_cube[..., 2] = self.vel[2]
             
             # calculate the helmholtz decomposition
-            F_irrot, F_solen = dvf.helmholtz_decomposition(vel_cube,n_workers)
+            F_irrot, F_solen = dvar.helmholtz_decomposition(vel_cube)
             
             # write the new variable to the object
-            for idx, coords in enumerate(["x", "y", "z"]):
-                setattr(self, f"vel_comp{coords}", F_irrot[..., idx])
-                setattr(self, f"vel_sol{coords}", F_solen[..., idx])
+            setattr(self, f"vel_comp", F_irrot)
+            setattr(self, f"vel_sol", F_solen)
                 
         
         # Defn: the magnetic tension field
         if field_str == "tens":
-            print(f"derived_var: Calculating magnetic tension field.")
+            if debug:
+                print(f"derived_var: Calculating magnetic tension field.")
             
             # make sure these fields have been read in
             if not self.read_mag:
@@ -705,33 +704,31 @@ class Fields():
                 
             # define the magnetic tension field
             tens = np.einsum("i...,ij...->j...",
-                             np.array[self.magx,self.magy,self.magz],
-                             dvf.gradient_tensor(np.array[self.magx,self.magy,self.magz]))
+                             np.array(self.mag),
+                             dvar.gradient_tensor(np.array(self.mag)))
             
             # write the new variable to the object
-            for idx, coord in enumerate(["x","y","z"]):
-                setattr(self, f"tens{coord}", tens[idx])
+            setattr(self, f"tens", tens)
     
     
         # Defn: the viscous dissipation
         if field_str == "visc_diss":
-            print(f"derived_var: Calculating the dissipation rate.")
+            if debug:
+                print(f"derived_var: Calculating the dissipation rate.")
             
             # make sure these fields have been read in
             if not self.read_mag:
                 self.read("vel")
                 
             # define the magnetic tension field
-            sym, _, _ = dvf.orthogonal_tensor_decomposition(
-                dvf.gradient_tensor([self.velx,
-                                     self.vely,
-                                     self.velz])
+            sym = dvar.orthogonal_tensor_decomposition(
+                dvar.gradient_tensor(self.vel)
                 )
             
-            visc_diss = 2 * dvf.tensor_contraction(sym,sym)
+            visc_diss = 2 * dvar.tensor_double_contraction(sym,sym)
             
             # write the new variable to the object
-            setattr(self, f"visc_diss", visc_diss)
+            setattr(self, f"visc_diss", np.array([visc_diss]))
             
             
 
