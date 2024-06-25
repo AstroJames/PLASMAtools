@@ -473,11 +473,11 @@ class DerivedVars(ScalarOperations,
         compress = - 2.0*omega/3.0 * self.vector_divergence(velocity_vector_field)   
         
         # vortex stretching term, \omega . \nabla u
-        grad_v =  self.gradient_tensor(velocity_vector_field)
+        grad_u =  self.gradient_tensor(velocity_vector_field)
         tensor_trace = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
-                                                            np.einsum("ii...",grad_v),
+                                                            np.einsum("ii...",grad_u),
                                                             np.identity(self.num_of_dims))
-        stretch = self.vector_dot_tensor(omega, grad_v - tensor_trace)
+        stretch = self.vector_dot_tensor(omega, grad_u - tensor_trace)
         
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
