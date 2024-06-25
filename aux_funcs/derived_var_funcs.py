@@ -469,12 +469,15 @@ class DerivedVars(ScalarOperations,
         # compute the vorticity, \omega = \nabla \times u
         omega = self.vector_curl(velocity_vector_field)
         
-        # vorticity compression term, - (\nabla . u) \omega
-        compress = - omega * self.vector_divergence(velocity_vector_field)   
+        # vorticity compression term, - (2/3) (\nabla . u) \omega
+        compress = - 2.0*omega/3.0 * self.vector_divergence(velocity_vector_field)   
         
         # vortex stretching term, \omega . \nabla u
-        stretch = self.vector_dot_tensor(omega,
-                                         self.gradient_tensor(velocity_vector_field))
+        grad_v =  self.gradient_tensor(velocity_vector_field)
+        tensor_trace = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
+                                                            np.einsum("ii...",grad_v),
+                                                            np.identity(self.num_of_dims))
+        stretch = self.vector_dot_tensor(omega, grad_v - tensor_trace)
         
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
@@ -998,7 +1001,7 @@ class DerivedVars(ScalarOperations,
 
     def classification_of_critical_points(self,
                                           trace_M  : np.ndarray,
-                                          D        : np.ndarray,
+                                          det_M    : np.ndarray,
                                           J_3      : np.ndarray,
                                           J_thresh : np.ndarray,
                                           eig_1    : np.ndarray,
@@ -1023,10 +1026,13 @@ class DerivedVars(ScalarOperations,
             eig1_real = np.real(eig_1)
             eig2_real = np.real(eig_2)
             
-            is_3D = np.abs(trace_M) > 0.0
+            eig1_imag = np.imag(eig_1)
+            eig2_imag = np.imag(eig_2)
+            
             is_2D = np.isclose(trace_M,0.0,1e-3)
-            is_real_eig = np.abs(J_3) < 1.1*J_thresh
-            is_imag_eig = np.abs(J_3) > 1.1*J_thresh
+            is_3D = (is_2D == False)
+            is_real_eig = np.abs(J_3) < J_thresh
+            is_imag_eig = np.abs(J_3) > J_thresh
             # is_real_eig = np.isclose(np.real(eig_1),0.0,atol=1e-1) & np.isclose(np.real(eig_2),0.0,atol=1e-1)
             # is_imag_eig = (is_real_eig == False)
             is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
@@ -1047,7 +1053,7 @@ class DerivedVars(ScalarOperations,
                                                                 trace_M > 0.0])
             
             # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
-            classification_array[1,...] += np.logical_and.reduce([is_3D, 
+            classification_array[2,...] = np.logical_and.reduce([is_3D, 
                                                                 is_imag_eig, 
                                                                 trace_M < 0.0])
             
