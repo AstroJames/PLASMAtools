@@ -48,7 +48,7 @@ def compute_power_spectrum_3D(field: np.ndarray) -> np.ndarray:
     if pyfftw_import:
         ft = pyfftw.builders.fftn(field,
                                   axes        = (1,2,3),
-                                  direction   = 'FFTW_BACKWARD',
+                                  direction   = 'forward',
                                   threads     = threads)
         
     else:
