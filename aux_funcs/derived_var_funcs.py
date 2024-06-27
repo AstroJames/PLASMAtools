@@ -470,7 +470,7 @@ class DerivedVars(ScalarOperations,
         omega = self.vector_curl(velocity_vector_field)
         
         # vorticity compression term, - (2/3) (\nabla . u) \omega
-        compress = - 2.0*omega/3.0 * self.vector_divergence(velocity_vector_field)   
+        compress = - 2.0 * omega/3.0 * self.vector_divergence(velocity_vector_field)   
         
         # vortex stretching term, \omega . \nabla u
         grad_u =  self.gradient_tensor(velocity_vector_field)
@@ -505,6 +505,24 @@ class DerivedVars(ScalarOperations,
                 )
             
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
+        
+        
+    def lorentz_force(self,
+                      magnetic_vector_field : np.ndarray) -> np.ndarray:
+        """
+        Compute the Lorentz force from the magnetic field.
+        
+        Args:
+            magnetic_vector_field (np.ndarray): magnetic vector field (3,N,N,N). Defaults to None.
+
+        Returns:
+            the Lorentz force field (3,N,N,N).
+            
+        """
+        
+        return self.vector_dot_tensor(magnetic_vector_field,
+                                      self.gradient_tensor(magnetic_vector_field)) / self.mu0
+        
         
     
     def symmetric_eigvals(self, 
