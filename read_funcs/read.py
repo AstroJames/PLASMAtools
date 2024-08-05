@@ -346,6 +346,7 @@ class Fields():
              field_str          : str,
              vector_magnitude   : bool = False,
              debug              : bool = False,
+             interpolate        : bool = True,
              N_grid_x           : int  = 256,
              N_grid_y           : int  = 256,
              N_grid_z           : int  = 256) -> None:
@@ -445,16 +446,22 @@ class Fields():
             # read in coordinates
             if field_lookup_type[field_str] == "scalar":
                  for var in bhac_lookup_dict[field_str]:
-                    setattr(self, field_str, d.get_uniform_grid(varname=var,
-                                                        N_grid_x=N_grid_x,
-                                                        N_grid_y=N_grid_y))               
+                     if interpolate:
+                        setattr(self, field_str, d.interpolate_uniform_grid(varname=var,
+                                                            N_grid_x=N_grid_x,
+                                                            N_grid_y=N_grid_y))
+                     else:
+                        setattr(self, field_str, d.uniform_grid(varname=var))              
             elif field_lookup_type[field_str] == "vector":
                 
                 for var, coord in zip(bhac_lookup_dict[field_str],["x","y","z"]):
                     t1 = timeit.default_timer()
-                    setattr(self, field_str + coord, d.get_uniform_grid(varname=var,
-                                                        N_grid_x=N_grid_x,
-                                                        N_grid_y=N_grid_y))
+                    if interpolate:
+                        setattr(self, field_str + coord, d.interpolate_uniform_grid(varname=var,
+                                                            N_grid_x=N_grid_x,
+                                                            N_grid_y=N_grid_y))
+                    else:
+                        setattr(self, field_str + coord, d.uniform_grid(varname=var))
                     t2 = timeit.default_timer()
                     print(f"The total time it took is: {t2-t1}")
                

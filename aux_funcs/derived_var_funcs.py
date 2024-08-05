@@ -274,7 +274,7 @@ class DerivedVars(ScalarOperations,
 
 
     def kinetic_helicity(self,
-                        velocity_vector_field : np.ndarray ) -> np.ndarray:
+                         velocity_vector_field : np.ndarray ) -> np.ndarray:
         """
         Compute the kinetic helicity of a velocity field.
         
@@ -342,7 +342,7 @@ class DerivedVars(ScalarOperations,
                                    gradient_dir=coord, 
                                    boundary_condition=self.bcs[component_idx])
 
-        # compute the gradient tensor in parallel
+        #compute the gradient tensor in parallel
         with ThreadPoolExecutor() as executor:
             futures = {}
             for i in range(self.num_of_dims):
@@ -351,13 +351,13 @@ class DerivedVars(ScalarOperations,
 
             for (i, j), future in futures.items():
                 grad_tensors[i, j] = future.result()
-
-        return self.tensor_transpose(grad_tensors)           
-
+        
+        return self.tensor_transpose(grad_tensors)
+    
         
     def orthogonal_tensor_decomposition(self,
                                         tensor_field    : np.ndarray,
-                                        sym             : bool = True,
+                                        sym             : bool = False,
                                         asym            : bool = False,
                                         bulk            : bool = False,
                                         all             : bool = False ) -> np.ndarray:
@@ -411,6 +411,25 @@ class DerivedVars(ScalarOperations,
         if all:
             tensor_transpose = self.tensor_transpose(tensor_field)
             return 0.5 * (tensor_field + tensor_transpose) - tensor_bulk, 0.5 * (tensor_field - tensor_transpose), tensor_bulk
+
+
+    def vector_dot_gradient_tensor(self,
+                                   vector_field_1 : np.ndarray,
+                                   vector_field_2 : np.ndarray) -> np.ndarray:
+        """
+
+        """
+        
+        return np.array([vector_field_1[coord] * (self.d.gradient(vector_field_2[X], 
+                                                              gradient_dir=coord, 
+                                                              boundary_condition=self.bcs[coord]) +
+                                              self.d.gradient(vector_field_2[Y], 
+                                                              gradient_dir=coord, 
+                                                              boundary_condition=self.bcs[coord]) +
+                                              self.d.gradient(vector_field_2[Z], 
+                                                              gradient_dir=coord, 
+                                                              boundary_condition=self.bcs[coord])) for coord in self.coords])
+                                      
 
 
     def vorticity_decomp(self,
@@ -470,12 +489,15 @@ class DerivedVars(ScalarOperations,
         # compute the vorticity, \omega = \nabla \times u
         omega = self.vector_curl(velocity_vector_field)
         
-        # vorticity compression term, - (\nabla . u) \omega
-        compress = - omega * self.vector_divergence(velocity_vector_field)   
+        # vorticity compression term, - (2/3) (\nabla . u) \omega
+        compress = - 2.0 * omega/3.0 * self.vector_divergence(velocity_vector_field)   
         
         # vortex stretching term, \omega . \nabla u
-        stretch = self.vector_dot_tensor(omega,
-                                         self.gradient_tensor(velocity_vector_field))
+        grad_u =  self.gradient_tensor(velocity_vector_field)
+        tensor_trace = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
+                                                            np.einsum("ii...",grad_u),
+                                                            np.identity(self.num_of_dims))
+        stretch = self.vector_dot_tensor(omega, grad_u - tensor_trace)
         
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
@@ -503,6 +525,24 @@ class DerivedVars(ScalarOperations,
                 )
             
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
+        
+        
+    def lorentz_force(self,
+                      magnetic_vector_field : np.ndarray) -> np.ndarray:
+        """
+        Compute the Lorentz force from the magnetic field.
+        
+        Args:
+            magnetic_vector_field (np.ndarray): magnetic vector field (3,N,N,N). Defaults to None.
+
+        Returns:
+            the Lorentz force field (3,N,N,N).
+            
+        """
+        
+        return self.vector_dot_tensor(magnetic_vector_field,
+                                      self.gradient_tensor(magnetic_vector_field)) / self.mu0
+        
         
     
     def symmetric_eigvals(self, 
@@ -594,6 +634,9 @@ class DerivedVars(ScalarOperations,
             return eig_array
         
 
+
+
+
     def helmholtz_decomposition(self,
                                 vector_field : np.ndarray) -> np.ndarray:
         """
@@ -623,54 +666,52 @@ class DerivedVars(ScalarOperations,
         # Fourier transform to Fourier space  
         if pyfftw_import:
             Fhat = pyfftw.builders.fftn(vector_field,
-                                        axes=(0, 1, 2),
-                                        direction='FFTW_BACKWARD',
+                                        axes=(1, 2, 3),
+                                        norm='forward',
                                         threads=threads)
             Fhat = Fhat()
         else:    
             Fhat = fft.fftn(vector_field,
-                            axes=(0, 1, 2),
+                            axes=(1, 2, 3),
                             norm = 'forward')
         
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
         Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
-        norm       = np.zeros(shape, dtype=np.float64)
+        ksqr       = np.zeros(shape, dtype=np.float64)
         
         # Compute wave numbers
-        kx = 2*np.pi * np.fft.fftfreq(shape[X]) * shape[X] / (x[-1] - x[0])
-        ky = 2*np.pi * np.fft.fftfreq(shape[Y]) * shape[Y] / (x[-1] - x[0])
-        kz = 2*np.pi * np.fft.fftfreq(shape[Z]) * shape[Z] / (x[-1] - x[0])
-        kX, kY, kZ = np.meshgrid(kx, ky, kz, indexing='ij')
+        k = np.stack(np.meshgrid(2*np.pi * np.fft.fftfreq(shape[1]) * shape[1] / (x[-1] - x[0]),
+                                 2*np.pi * np.fft.fftfreq(shape[2]) * shape[2] / (x[-1] - x[0]),
+                                 2*np.pi * np.fft.fftfreq(shape[3]) * shape[3] / (x[-1] - x[0]),
+                                 indexing='ij'),
+                     axis=0)
         
         # Avoid division by zero
-        norm = kX**2 + kY**2 + kZ**2
-        norm[0, 0, 0] = 1
-        
-        # Compute divergence and curl in Fourier space (note python doesn't seem to want to use i)
-        divFhat = (kX * Fhat[..., X] + kY * Fhat[..., Y] + kZ * Fhat[..., Z])
+        ksqr = self.vector_dot_product(k,k)
+        ksqr[0, 0, 0] = 1
         
         # Compute irrotational and solenoidal components in Fourier space
-        Fhat_irrot = np.transpose(divFhat * np.array([kX, kY, kZ]) / norm[np.newaxis, ...],(1,2,3,0))
-        Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
+        Fhat_irrot =  self.vector_dot_product(k,Fhat) * k / ksqr 
+        Fhat_solen = Fhat - Fhat_irrot #curlFhat
         
         # Inverse Fourier transform to real space
         if pyfftw_import:
             F_irrot = pyfftw.builders.ifftn(Fhat_irrot,
-                                            axes=(0, 1, 2),
+                                            axes=(1, 2, 3),
                                             threads=threads,
-                                            direction='FFTW_FORWARD')
+                                            norm='forward')
             F_solen = pyfftw.builders.ifftn(Fhat_solen,
-                                            axes=(0, 1, 2),
+                                            axes=(1, 2, 3),
                                             threads=threads,
-                                            direction='FFTW_FORWARD')
+                                            norm='forward')
             F_irrot = np.real(F_irrot())
             F_solen = np.real(F_solen())
         else:            
             F_irrot = fft.ifftn(Fhat_irrot,
-                                axes=(X,Y,Z),
+                                axes=(1,2,3),
                                 norm = 'forward').real
             F_solen = fft.ifftn(Fhat_solen,
-                                axes=(X,Y,Z),
+                                axes=(1,2,3),
                                 norm = 'forward').real
         
         # Remove numerical noise
@@ -999,7 +1040,7 @@ class DerivedVars(ScalarOperations,
 
     def classification_of_critical_points(self,
                                           trace_M  : np.ndarray,
-                                          D        : np.ndarray,
+                                          det_M    : np.ndarray,
                                           J_3      : np.ndarray,
                                           J_thresh : np.ndarray,
                                           eig_1    : np.ndarray,
@@ -1024,10 +1065,13 @@ class DerivedVars(ScalarOperations,
             eig1_real = np.real(eig_1)
             eig2_real = np.real(eig_2)
             
-            is_3D = np.abs(trace_M) > 0.0
+            eig1_imag = np.imag(eig_1)
+            eig2_imag = np.imag(eig_2)
+            
             is_2D = np.isclose(trace_M,0.0,1e-3)
-            is_real_eig = np.abs(J_3) < 1.1*J_thresh
-            is_imag_eig = np.abs(J_3) > 1.1*J_thresh
+            is_3D = (is_2D == False)
+            is_real_eig = np.abs(J_3) < J_thresh
+            is_imag_eig = np.abs(J_3) > J_thresh
             # is_real_eig = np.isclose(np.real(eig_1),0.0,atol=1e-1) & np.isclose(np.real(eig_2),0.0,atol=1e-1)
             # is_imag_eig = (is_real_eig == False)
             is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
@@ -1048,7 +1092,7 @@ class DerivedVars(ScalarOperations,
                                                                 trace_M > 0.0])
             
             # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
-            classification_array[1,...] += np.logical_and.reduce([is_3D, 
+            classification_array[2,...] = np.logical_and.reduce([is_3D, 
                                                                 is_imag_eig, 
                                                                 trace_M < 0.0])
             

@@ -4,9 +4,42 @@ import numpy as np
 import vtk as v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 import time
-from scipy.interpolate import griddata
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+from joblib import Parallel, delayed
+from scipy.interpolate import griddata, NearestNDInterpolator
+from scipy.ndimage import distance_transform_edt
 
 default_timer = time.time
+
+# def convert_to_parallel_vtk(file_name):
+#     # Create or load your unstructured grid data
+#     unstructuredGrid = v.vtkUnstructuredGrid()
+
+#     # Assume `unstructuredGrid` is your VTK data
+#     # Partition your data into N pieces
+#     N = 4  # Number of partitions
+#     partitioner = v.vtkUnstructuredGridPartitioner()
+#     partitioner.SetInputData(unstructuredGrid)
+#     partitioner.SetNumberOfPartitions(N)
+#     partitioner.Update()
+
+#     # Write each partition to a .vtu file
+#     writers = []
+#     for i in range(N):
+#         part = partitioner.GetOutput().GetBlock(i)
+#         writer = v.vtkXMLUnstructuredGridWriter()
+#         writer.SetFileName(f"{file_name}.vtu")
+#         writer.SetInputData(part)
+#         writer.Write()
+#         writers.append(writer)
+
+#     # Write the .pvtu file
+#     pwriter = v.vtkXMLPUnstructuredGridWriter()
+#     pwriter.SetFileName(f"{file_name}.vtu")
+#     pwriter.SetInputData(unstructuredGrid)
+#     pwriter.SetNumberOfPieces(N)
+#     pwriter.Write()
 
 class reformat_BHAC_field:
     """
@@ -23,14 +56,16 @@ class reformat_BHAC_field:
                  scaleX         : float = 1,
                  scaleY         : float = 1,
                  scaleZ         : float = 1,
-                 silent         : bool = True):
+                 silent         : bool = False,
+                 parallel       : bool = False):
         
-        
-        self.filenameout = file
-        self.type = type
-        self.isLoaded = False
-        self.mirrorPlane=mirrorPlane
-        self.silent = silent
+        self.filename       = file
+        self.filenameout    = file
+        self.type           = type
+        self.parallel       = parallel    
+        self.isLoaded       = False
+        self.mirrorPlane    = mirrorPlane
+        self.silent         = silent
         
         self.rotateX = rotateX
         self.rotateY = rotateY
@@ -40,7 +75,7 @@ class reformat_BHAC_field:
         self.scaleY = scaleY
         self.scaleZ = scaleZ
 
-        self.filename = file
+        
         self.datareader = v.vtkXMLUnstructuredGridReader()
         if (not self.silent): print('========================================')
         if (not self.silent): print('loading file %s' % (self.filename))
@@ -48,25 +83,76 @@ class reformat_BHAC_field:
         if get != None:
             self.getAll()
 
-
     def getAll(self):
+        """
+        
+        Populate all of the attributes in the BHAC data class.
+        
+        Args:
+        
+        Returns:
+
+        
+        """
+        
+        # get data
         t0 = default_timer()
-        self.getData()
+        #convert_to_parallel_vtk(self.filename.split(".")[0])
+        
+        if self.parallel:
+            pass
+        else:
+            self.getData()
+            
         tdata = default_timer()
-        if (not self.silent): print('Reading data time= %f sec' % (tdata-t0))
+        
+        if (not self.silent): 
+            print('Reading data time= %f sec' % (tdata-t0))
+        
         if self.mirrorPlane != None:
-            if (not self.silent): print('========== Mirror about plane ',self.mirrorPlane,' ... ============')
+            if (not self.silent): 
+                print('========== Mirror about plane ',self.mirrorPlane,' ... ============')
             self.mirror()
-        if (not self.silent): print('========== Initializing ... ============')
-        self.getVars()
+        
+        if (not self.silent): 
+            print('========== Initializing ... ============')
+        
+        if self.parallel:
+            self.get_vars_parallel()
+        else:
+            self.getVars()
         tvars = default_timer()
-        if (not self.silent): print('Getting vars time= %f sec' % (tvars-tdata))
+        
+        if (not self.silent): 
+            print('Getting vars time= %f sec' % (tvars-tdata))
+        
         self.getPoints()
         tpoints = default_timer()
-        if (not self.silent): print('Getting points time= %f sec' % (tpoints-tvars))
+        
+        if (not self.silent): 
+            print('Getting points time= %f sec' % (tpoints-tvars))
+        
         self.getTime()
         tend = default_timer()
-        if (not self.silent): print('========== Finished loading %d cells in %f sec, have a nice day! ===========' % (self.ncells, (tend-t0) ))
+        
+        if (not self.silent): 
+            print('========== Finished loading %d cells in %f sec! ===========' % (self.ncells, (tend-t0) ))
+        
+    def get_vars_parallel(self):
+        """
+        Parallel method to get variables from VTK data using ProcessPoolExecutor.
+        """
+        nvars = self.data.GetCellData().GetNumberOfArrays()
+        varnames = [self.data.GetCellData().GetArrayName(i) for i in range(nvars)]
+
+        with ProcessPoolExecutor() as executor:
+            futures = {executor.submit(read_var_from_file, 
+                                       self.filename, 
+                                       varnames[i]): varnames[i] for i in range(nvars)}
+
+            for future in as_completed(futures):
+                varname, values = future.result()
+                setattr(self, varname, values)
 
 
     def getTime(self):
@@ -88,12 +174,15 @@ class reformat_BHAC_field:
     def getData(self):
         self.datareader.SetFileName(self.filename)
         self.datareader.Update()
-        self.data = self.datareader.GetOutput()
-        self.ncells = self.data.GetNumberOfCells()
-        self.isLoaded = True
-
-        if (self.rotateX != 0 or self.rotateY != 0 or self.rotateZ != 0
-            or self.scaleX != 1 or self.scaleY != 1 or self.scaleZ != 1):
+        self.data       = self.datareader.GetOutput()
+        self.ncells     = self.data.GetNumberOfCells()
+        self.isLoaded   = True
+        if (self.rotateX != 0 or 
+            self.rotateY != 0 or 
+            self.rotateZ != 0 or 
+            self.scaleX != 1 or 
+            self.scaleY != 1 or 
+            self.scaleZ != 1):
             transform = v.vtkTransform()
             transform.RotateX(self.rotateX)
             transform.RotateY(self.rotateY)
@@ -104,6 +193,11 @@ class reformat_BHAC_field:
             transfilter.SetInputData(self.data)
             self.data = transfilter.GetOutput()
             transfilter.Update()
+
+    def getData_parallel(self):
+        self.datareader.SetFileName(self.filename)
+        self.datareader.Update()
+        return self.datareader.GetOutput()
 
 
     def getVars(self):
@@ -263,7 +357,7 @@ class reformat_BHAC_field:
             self.ndim=self.ndim - 1
         return self.ndim
     
-    
+            
     def fill_nan(self, grid):
         nan_mask = np.isnan(grid)
         not_nan_mask = ~nan_mask
@@ -275,13 +369,13 @@ class reformat_BHAC_field:
         return grid
 
 
-    def get_uniform_grid(self, 
-                       varname  : str = "b2", 
-                       N_grid_x : int = 256,
-                       N_grid_y : int = 256):  
+    def interpolate_uniform_grid(self, 
+                                 varname  : str = "b2", 
+                                 N_grid_x : int = 256,
+                                 N_grid_y : int = 256):  
         """
-        description: interpolates the variable onto a uniform grid, and uses nearest neighbour interpolation for 
-        the bounds
+        description: interpolates the variable onto a uniform grid, and uses nearest 
+        neighbour interpolation for the bounds
 
         inputs: varname: the variable to plot. 
         N_grid_x: the x dimension of the interpolated grid
@@ -305,7 +399,6 @@ class reformat_BHAC_field:
         grid_x, grid_y = np.meshgrid(x_grid, y_grid)
         
         # Interpolate data onto the regular grid
-    
         interp_grid = (griddata((centerpoints[:, 1], 
                                 centerpoints[:, 0]), 
                                 self.data.GetCellData().GetArray(varname), 
@@ -319,3 +412,38 @@ class reformat_BHAC_field:
 
         return interp_grid
     
+    
+    def uniform_grid(self,
+                     varname: str = "b2"):
+        """
+        This function reads directly from the data and reorganizes it into a uniform grid.
+        It assumes that the data has the same number of cells in each direction.
+        """
+        
+        num_of_cells_in_each_dim = int(np.sqrt(self.ncells))
+
+        # Compute the cell centers for BHAC
+        centerpoints = self.getCenterPoints()
+        
+        # Generate a regular grid
+        x_coords = centerpoints[:, 1]
+        y_coords = centerpoints[:, 0]
+        
+        x_min, x_max = x_coords.min(), x_coords.max()
+        y_min, y_max = y_coords.min(), y_coords.max()
+
+        # Create an empty grid
+        grid = np.zeros((num_of_cells_in_each_dim,
+                         num_of_cells_in_each_dim))
+        
+        # Normalize coordinates to grid indices
+        x_indices = np.floor((x_coords - x_min) / (x_max - x_min) * (num_of_cells_in_each_dim - 1)).astype(int)
+        y_indices = np.floor((y_coords - y_min) / (y_max - y_min) * (num_of_cells_in_each_dim - 1)).astype(int)
+
+        # Read the data and place it into the regular grid
+        grid[x_indices, y_indices] = np.array(self.data.GetCellData().GetArray(varname))
+        
+        return grid
+        
+        
+        

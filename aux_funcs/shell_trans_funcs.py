@@ -1,8 +1,8 @@
-from FLASHtools.read_funcs.read import Fields
+from PLASMAtools.read_funcs.read import Fields
 import numpy as np 
 import os 
 from scipy.fft import fftfreq, fftn, ifftn 
-from FLASHtools.aux_funcs import derived_var_funcs as dvf
+from PLASMAtools.aux_funcs.derived_var_funcs import DerivedVars
 from joblib import Parallel, delayed
 import argparse
 
@@ -269,6 +269,9 @@ def CalcTransfer(field_1        : np.ndarray,
     
     """
     
+    
+    dvf = DerivedVars(L,)
+    
     print(f"Computing transfer for Kbin {idx_K} and Qbin {idx_Q}")
         
     # Compute the advective and compressive flux terms
@@ -277,16 +280,17 @@ def CalcTransfer(field_1        : np.ndarray,
         U_K = extract_shell_X(field_1, Kbins[idx_K], Kbins[idx_K + 1], filter_type = direction)
         U_Q = extract_shell_X(field_2, Qbins[idx_Q], Qbins[idx_Q + 1], filter_type = direction)
         
-        grad_U_Q        = dvf.gradient_tensor(U_Q, order)
-        v_dot_grad_U_Q  = np.einsum("i...,ij...-> i...", vel, grad_U_Q)
-        incomp_term     = np.einsum("i...,i...-> ...", U_K, v_dot_grad_U_Q)
-
-        divU            = dvf.vector_divergence(vel, order)
-        U_K_dot_U_Q     = np.einsum("i...,i...-> ...",U_K, U_Q)
-        comp_term       = 0.5 * U_K_dot_U_Q * divU
-
-        advection       = -np.sum(incomp_term)  # advection term
-        compressive     = -np.sum(comp_term)    # compressive term
+        
+        grad_U_Q_s, grad_U_Q_a, grad_U_Q_b = dvf.orthogonal_tensor_decomposition(dvf.gradient_tensor(U_Q),
+                                                                                 all=True)
+  
+        advection = -np.sum(np.einsum("i...,i...-> ...", U_K, 
+                                      np.einsum("i...,ij...-> i...", 
+                                                vel, 
+                                                grad_U_Q_s + grad_U_Q_a)))  # advection term
+        compressive = -np.sum(1.0/3.0 * np.einsum("i...,i...-> ...",
+                                                  U_K,
+                                                  vel) * grad_U_Q_b)        # compressive term
     # compute the cross term (magnetic tension)
     elif transfer_func == "ubt":
         # field 1 = 
@@ -382,22 +386,17 @@ def compute_transfers(field_1       : np.ndarray,
 def read_fields(turb,transfer_func):
     # transform appriorate fields
     if transfer_func == "uu": 
-        turb.read("vel") 
-        field_1     = np.array([turb.velx,turb.vely,turb.velz])
+        field_1     = turb.read("vel") 
         field_2     = field_1
         vel         = field_1
     elif transfer_func == "bb":
-        turb.read("mag")
-        turb.read("vel")
-        field_1     = np.array([turb.magx,turb.magy,turb.magz])
+        field_1     = turb.read("mag")
         field_2     = field_1
-        vel         = np.array([turb.velx,turb.vely,turb.velz])
+        vel         = turb.read("vel")
     elif transfer_func == "ub":
-        turb.read("mag")
-        turb.read("vel")  
-        field_1     = np.array([turb.velx,turb.vely,turb.velz])
-        field_2     = np.array([turb.magx,turb.magy,turb.magz])
-        vel         = np.array([turb.magx,turb.magy,turb.magz])/np.sqrt(4*np.pi)
+        field_1     = turb.read("vel")
+        field_2     = turb.read("mag")
+        vel         = field_2/np.sqrt(4*np.pi)
         
     return field_1, field_2, vel
 
@@ -416,8 +415,7 @@ if __name__ == "__main__":
     dir_name = file_name.split("_")[0] + file_name.split("_")[-1]
     
     # read in the data
-    turb = Fields(data_path + file_name,
-                  reformat=True)
+    turb = Fields(data_path + file_name,reformat=True)
     
     # read the appropriate fields
     field_1, field_2, vel = read_fields(turb,transfer_func)
