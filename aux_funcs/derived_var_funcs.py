@@ -356,7 +356,7 @@ class DerivedVars(ScalarOperations,
         
     def orthogonal_tensor_decomposition(self,
                                         tensor_field    : np.ndarray,
-                                        sym             : bool = True,
+                                        sym             : bool = False,
                                         asym            : bool = False,
                                         bulk            : bool = False,
                                         all             : bool = False ) -> np.ndarray:

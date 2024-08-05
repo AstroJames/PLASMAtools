@@ -46,10 +46,11 @@ def compute_power_spectrum_3D(field: np.ndarray) -> np.ndarray:
     
     # Compute the 3D Fourier Transform
     if pyfftw_import:
-        ft = pyfftw.builders.fftn(field,
+        fftw_object = pyfftw.builders.fftn(field,
                                   axes        = (1,2,3),
                                   direction   = 'forward',
                                   threads     = threads)
+        fft_result = fftw_object()
         
     else:
         ft = np.fft.fftn(field,
