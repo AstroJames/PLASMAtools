@@ -273,7 +273,7 @@ class DerivedVars(ScalarOperations,
 
 
     def kinetic_helicity(self,
-                        velocity_vector_field : np.ndarray ) -> np.ndarray:
+                         velocity_vector_field : np.ndarray ) -> np.ndarray:
         """
         Compute the kinetic helicity of a velocity field.
         
@@ -341,7 +341,7 @@ class DerivedVars(ScalarOperations,
                                    gradient_dir=coord, 
                                    boundary_condition=self.bcs[component_idx])
 
-        # compute the gradient tensor in parallel
+        #compute the gradient tensor in parallel
         with ThreadPoolExecutor() as executor:
             futures = {}
             for i in range(self.num_of_dims):
@@ -350,9 +350,9 @@ class DerivedVars(ScalarOperations,
 
             for (i, j), future in futures.items():
                 grad_tensors[i, j] = future.result()
-
-        return self.tensor_transpose(grad_tensors)           
-
+        
+        return self.tensor_transpose(grad_tensors)
+    
         
     def orthogonal_tensor_decomposition(self,
                                         tensor_field    : np.ndarray,
@@ -410,6 +410,25 @@ class DerivedVars(ScalarOperations,
         if all:
             tensor_transpose = self.tensor_transpose(tensor_field)
             return 0.5 * (tensor_field + tensor_transpose) - tensor_bulk, 0.5 * (tensor_field - tensor_transpose), tensor_bulk
+
+
+    def vector_dot_gradient_tensor(self,
+                                   vector_field_1 : np.ndarray,
+                                   vector_field_2 : np.ndarray) -> np.ndarray:
+        """
+
+        """
+        
+        return np.array([vector_field_1[coord] * (self.d.gradient(vector_field_2[X], 
+                                                              gradient_dir=coord, 
+                                                              boundary_condition=self.bcs[coord]) +
+                                              self.d.gradient(vector_field_2[Y], 
+                                                              gradient_dir=coord, 
+                                                              boundary_condition=self.bcs[coord]) +
+                                              self.d.gradient(vector_field_2[Z], 
+                                                              gradient_dir=coord, 
+                                                              boundary_condition=self.bcs[coord])) for coord in self.coords])
+                                      
 
 
     def vorticity_decomp(self,
@@ -614,6 +633,9 @@ class DerivedVars(ScalarOperations,
             return eig_array
         
 
+
+
+
     def helmholtz_decomposition(self,
                                 vector_field : np.ndarray) -> np.ndarray:
         """
@@ -643,54 +665,52 @@ class DerivedVars(ScalarOperations,
         # Fourier transform to Fourier space  
         if pyfftw_import:
             Fhat = pyfftw.builders.fftn(vector_field,
-                                        axes=(0, 1, 2),
-                                        direction='FFTW_BACKWARD',
+                                        axes=(1, 2, 3),
+                                        norm='forward',
                                         threads=threads)
             Fhat = Fhat()
         else:    
             Fhat = fft.fftn(vector_field,
-                            axes=(0, 1, 2),
+                            axes=(1, 2, 3),
                             norm = 'forward')
         
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
         Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
-        norm       = np.zeros(shape, dtype=np.float64)
+        ksqr       = np.zeros(shape, dtype=np.float64)
         
         # Compute wave numbers
-        kx = 2*np.pi * np.fft.fftfreq(shape[X]) * shape[X] / (x[-1] - x[0])
-        ky = 2*np.pi * np.fft.fftfreq(shape[Y]) * shape[Y] / (x[-1] - x[0])
-        kz = 2*np.pi * np.fft.fftfreq(shape[Z]) * shape[Z] / (x[-1] - x[0])
-        kX, kY, kZ = np.meshgrid(kx, ky, kz, indexing='ij')
+        k = np.stack(np.meshgrid(2*np.pi * np.fft.fftfreq(shape[1]) * shape[1] / (x[-1] - x[0]),
+                                 2*np.pi * np.fft.fftfreq(shape[2]) * shape[2] / (x[-1] - x[0]),
+                                 2*np.pi * np.fft.fftfreq(shape[3]) * shape[3] / (x[-1] - x[0]),
+                                 indexing='ij'),
+                     axis=0)
         
         # Avoid division by zero
-        norm = kX**2 + kY**2 + kZ**2
-        norm[0, 0, 0] = 1
-        
-        # Compute divergence and curl in Fourier space (note python doesn't seem to want to use i)
-        divFhat = (kX * Fhat[..., X] + kY * Fhat[..., Y] + kZ * Fhat[..., Z])
+        ksqr = self.vector_dot_product(k,k)
+        ksqr[0, 0, 0] = 1
         
         # Compute irrotational and solenoidal components in Fourier space
-        Fhat_irrot = np.transpose(divFhat * np.array([kX, kY, kZ]) / norm[np.newaxis, ...],(1,2,3,0))
-        Fhat_solen = Fhat - Fhat_irrot #curlFhat / norm[np.newaxis, ...]
+        Fhat_irrot =  self.vector_dot_product(k,Fhat) * k / ksqr 
+        Fhat_solen = Fhat - Fhat_irrot #curlFhat
         
         # Inverse Fourier transform to real space
         if pyfftw_import:
             F_irrot = pyfftw.builders.ifftn(Fhat_irrot,
-                                            axes=(0, 1, 2),
+                                            axes=(1, 2, 3),
                                             threads=threads,
-                                            direction='FFTW_FORWARD')
+                                            norm='forward')
             F_solen = pyfftw.builders.ifftn(Fhat_solen,
-                                            axes=(0, 1, 2),
+                                            axes=(1, 2, 3),
                                             threads=threads,
-                                            direction='FFTW_FORWARD')
+                                            norm='forward')
             F_irrot = np.real(F_irrot())
             F_solen = np.real(F_solen())
         else:            
             F_irrot = fft.ifftn(Fhat_irrot,
-                                axes=(X,Y,Z),
+                                axes=(1,2,3),
                                 norm = 'forward').real
             F_solen = fft.ifftn(Fhat_solen,
-                                axes=(X,Y,Z),
+                                axes=(1,2,3),
                                 norm = 'forward').real
         
         # Remove numerical noise
