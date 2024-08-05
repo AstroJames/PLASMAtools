@@ -93,11 +93,7 @@ class VectorOperations:
         if self.num_of_dims == 1:
             ValueError("Vector cross product is not defined for 1D.")
         elif self.num_of_dims == 2:
-            return np.array([
-                0,
-                0,
-                vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]]
-                        )
+            return vector_field_1[X] * vector_field_2[Y] - vector_field_1[Y] * vector_field_2[X]
         elif self.num_of_dims == 3:
             return np.array([
                         vector_field_1[Y] * vector_field_2[Z] - vector_field_1[Z] * vector_field_2[Y],
