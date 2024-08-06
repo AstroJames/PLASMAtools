@@ -4,7 +4,7 @@
     Date: 09/07/2017
     Description: Functions for calculating fourier variables in the read_flash classes
 
-
+    Collaborators: Anne Noer Kolborg
 """
 
 ## ###############################################################
@@ -13,14 +13,23 @@
 
 import numpy.fft as fft
 import numpy as np
+import multiprocessing
+try: 
+    import pyfftw
+    pyfftw_import = True
+    pyfftw.interfaces.cache.enable()
+    threads = multiprocessing.cpu_count()
+except ImportError:
+    print("pyfftw not installed, using scipy's serial fft")
+pyfftw_import = False
 
 ## ###############################################################
 ## Spectral Functions
 ## ###############################################################
 
-def compute_power_spectrum_3D(volume: np.ndarray) -> np.ndarray:
+def compute_power_spectrum_3D(field: np.ndarray) -> np.ndarray:
     """
-    Computes the power spectrum of a 3D scalar field. Note the norm = "forward" 
+    Computes the power spectrum of a 3D vector field. Note the norm = "forward" 
     in the Fourier transform. This means that the power spectrum will be scaled by
     the number of grid points 1/N^3, and the inverse transform will be scaled by
     N^3.
@@ -32,16 +41,54 @@ def compute_power_spectrum_3D(volume: np.ndarray) -> np.ndarray:
         power_spectrum_3D (np.ndarray): 3D power spectrum of the input volume
     """
     
-    # Compute the 3D Fourier Transform
-    ft = np.fft.fftn(volume, norm='forward')
+    # the field should be i,N,N,N
+    assert len(field.shape) == 4, "Field should be 3D"
+        
+    # Compute the 9 component Fourier Transform and shift zero frequency component to center,
+    # then sum all the square components to get the power spectrum   
+    return np.sum(
+        np.abs(
+            np.fft.fftshift(
+                np.fft.fftn(field,
+                            axes=(1, 2, 3),
+                            norm='forward'),
+                axes=(1, 2, 3)))**2,
+        axis=0)
     
-    # Shift zero frequency component to center
-    ft = np.fft.fftshift(ft)
+def compute_tensor_power_spectrum(field: np.ndarray) -> np.ndarray:
+    """
+    Computes the power spectrum of a 3D tensor field. Note the norm = "forward" 
+    in the Fourier transform. This means that the power spectrum will be scaled by
+    the number of grid points 1/N^3, and the inverse transform will be scaled by
+    N^3.
     
-    # Compute the 3D power spectrum
-    power_spectrum_3D = np.abs(ft)**2
+    Author: James Beattie
+
+    Args:
+        tensor array (np.ndarray): 3D tensor field with 3,3,N,N,N components
+
+    Returns:
+        3d power spectrum (np.ndarray): 3D power spectrum of the input tensor volume with N,N,N grid array
+        and shifted such that the zero frequency is in the center (to be used with spherical_integrate)
+        
+    """
     
-    return power_spectrum_3D
+    # the field should be 3,3,N,N,N
+    assert len(field.shape) == 5, "Field should be a 3D tensor field, 3,3,N,N,N"
+    assert field.shape[0] == 3, "Field should be a 3D tensor field, 3,3,N,N,N"
+    assert field.shape[1] == 3, "Field should be a 3D tensor field, 3,3,N,N,N"
+    
+    # Compute the 9 component Fourier Transform and shift zero frequency component to center,
+    # then sum all the square components to get the power spectrum   
+    return np.sum(
+        np.abs(
+            np.fft.fftshift(
+                np.fft.fftn(
+                    field,
+                    axes=(2,3,4),
+                    norm='forward')))**2,
+        axis=(0,1))
+
 
 def spherical_integrate(data: np.ndarray, 
                         bins: int = None) -> tuple:
@@ -149,8 +196,8 @@ def cylindrical_integrate(data: np.ndarray,
     # Ensure that the length matches the expected size
     cylindrical_sum = cylindrical_sum[:bins_perp * bins_para]
     cylindrical_sum = cylindrical_sum.reshape((bins_perp, bins_para))
-    k_perp_modes = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
-    k_para_modes = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
+    k_perp_modes    = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
+    k_para_modes    = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
 
     return k_perp_modes, k_para_modes, cylindrical_sum
 
