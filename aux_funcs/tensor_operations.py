@@ -29,9 +29,9 @@ class TensorOperations:
                                                       tensor_field))
     
 
-    def tensor_double_contraction(self,
-                           tensor_field_0 : np.ndarray,
-                           tensor_field_1 : np.ndarray) -> np.ndarray:
+    def tensor_double_contraction_ij_ij(self,
+                                        tensor_field_0 : np.ndarray,
+                                        tensor_field_1 : np.ndarray) -> np.ndarray:
         """
         Compute the A_ijA_ij scalar field from a tensor field.
         
@@ -54,12 +54,38 @@ class TensorOperations:
                          tensor_field_0,
                          tensor_field_1)
         
+        
+    def tensor_double_contraction_ji_ij(self,
+                        tensor_field_0 : np.ndarray,
+                        tensor_field_1 : np.ndarray) -> np.ndarray:
+        """
+        Compute the A_jiA_ij scalar field from a tensor field.
+        
+        Author: James Beattie
+        
+        Args:
+            tensor_field_0 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
+                                            (i,j) are the tensor components and N is the number of grid
+                                            points in each direction
+            tensor_field_1 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
+                                            (i,j) are the tensor components and N is the number of grid 
+                                            points in each direction
 
-    def vector_dot_tensor(self,
+        Returns:
+            A_jiB_ij = a_11 b_11 + a_21 b_11 + ... a_nn b_nn: the contraction scalar field.
+        
+        """
+            
+        return np.einsum('ji...,ij...->...',
+                        tensor_field_0,
+                        tensor_field_1)
+        
+
+    def vector_dot_tensor_i_ij(self,
                           vector_field : np.ndarray,
                           tensor_field : np.ndarray) -> np.ndarray:
         """
-        Compute the A_iA_j tensor field from a vector field.
+        Compute the A_iB_ij vector field from a tensor field.
         
         Author: James Beattie
         
@@ -67,7 +93,7 @@ class TensorOperations:
             vector (np.ndarray)         : i,N,N,N array of vector field, where 
                                             i, are the vector components and N is the number of grid 
                                             points in each direction
-            tensor_field_1 (np.ndarray) : (i,j),N,N,N array of tensor field, where 
+            tensor_field (np.ndarray)   : (i,j),N,N,N array of tensor field, where 
                                             (i,j) are the tensor components and N is the number of grid
                                             points in each direction
 
