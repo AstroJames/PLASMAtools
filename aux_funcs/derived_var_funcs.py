@@ -419,15 +419,15 @@ class DerivedVars(ScalarOperations,
 
         """
         
-        return np.array([vector_field_1[coord] * (self.d.gradient(vector_field_2[X], 
-                                                              gradient_dir=coord, 
-                                                              boundary_condition=self.bcs[coord]) +
-                                              self.d.gradient(vector_field_2[Y], 
-                                                              gradient_dir=coord, 
-                                                              boundary_condition=self.bcs[coord]) +
-                                              self.d.gradient(vector_field_2[Z], 
-                                                              gradient_dir=coord, 
-                                                              boundary_condition=self.bcs[coord])) for coord in self.coords])
+        return np.array([vector_field_1[X] * self.d.gradient(vector_field_2[coord], 
+                                                              gradient_dir=X, 
+                                                              boundary_condition=self.bcs[X]) + 
+                         vector_field_1[Y] * self.d.gradient(vector_field_2[coord], 
+                                                              gradient_dir=Y, 
+                                                              boundary_condition=self.bcs[Y]) +
+                         vector_field_1[Z] * self.d.gradient(vector_field_2[coord], 
+                                                              gradient_dir=Z, 
+                                                              boundary_condition=self.bcs[Z]) for coord in self.coords])
                                       
 
 
