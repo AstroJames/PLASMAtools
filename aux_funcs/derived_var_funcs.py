@@ -496,7 +496,7 @@ class DerivedVars(ScalarOperations,
         tensor_trace = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
                                                             np.einsum("ii...",grad_u),
                                                             np.identity(self.num_of_dims))
-        stretch = self.vector_dot_tensor(omega, grad_u - tensor_trace)
+        stretch = self.vector_dot_tensor_i_ij(omega, grad_u - tensor_trace)
         
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
@@ -509,7 +509,7 @@ class DerivedVars(ScalarOperations,
             
             # magnetic tension term 1/\mu_0 \nabla \times (1/\rho) b . \nabla b)
             tension = self.vector_curl(
-                (1./density_scalar_field[X]) * self.vector_dot_tensor(
+                (1./density_scalar_field[X]) * self.vector_dot_tensor_i_ij(
                     magnetic_vector_field,
                     self.gradient_tensor(magnetic_vector_field)) / self.mu0
                 )
@@ -526,24 +526,23 @@ class DerivedVars(ScalarOperations,
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
         
         
-    def lorentz_force(self,
+    def tension_force(self,
                       magnetic_vector_field : np.ndarray) -> np.ndarray:
         """
-        Compute the Lorentz force from the magnetic field.
+        Compute the tension force from the magnetic field.
         
         Args:
             magnetic_vector_field (np.ndarray): magnetic vector field (3,N,N,N). Defaults to None.
 
         Returns:
-            the Lorentz force field (3,N,N,N).
+            the tension force field (3,N,N,N).
             
         """
         
-        return self.vector_dot_tensor(magnetic_vector_field,
+        return self.vector_dot_tensor_i_ij(magnetic_vector_field,
                                       self.gradient_tensor(magnetic_vector_field)) / self.mu0
         
         
-    
     def symmetric_eigvals(self, 
                           tensor_field : np.ndarray, 
                           find_vectors : bool = False) -> np.ndarray:
@@ -633,9 +632,6 @@ class DerivedVars(ScalarOperations,
             return eig_array
         
 
-
-
-
     def helmholtz_decomposition(self,
                                 vector_field : np.ndarray) -> np.ndarray:
         """
@@ -654,8 +650,7 @@ class DerivedVars(ScalarOperations,
             F_solen (np.ndarray) : 3,N,N,N array of solenoidal component of the vector field (divergence free)
         
         """
-        # F is a 4D array, with the last dimension being 3 (for the x, y, z components of the vector field)
-        # TODO: change the shape of F to be (3, N, N, N) instead of (N, N, N, 3) (consistent with other functions)
+    
         
         shape = vector_field.shape[:-1]
         x     = np.linspace(-self.L/2.0,
@@ -673,11 +668,12 @@ class DerivedVars(ScalarOperations,
             Fhat = fft.fftn(vector_field,
                             axes=(1, 2, 3),
                             norm = 'forward')
-        
+            
+        # initialisations of the irrotational and solenoidal components
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
         Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
         ksqr       = np.zeros(shape, dtype=np.float64)
-        
+                
         # Compute wave numbers
         k = np.stack(np.meshgrid(2*np.pi * np.fft.fftfreq(shape[1]) * shape[1] / (x[-1] - x[0]),
                                  2*np.pi * np.fft.fftfreq(shape[2]) * shape[2] / (x[-1] - x[0]),
@@ -712,11 +708,6 @@ class DerivedVars(ScalarOperations,
             F_solen = fft.ifftn(Fhat_solen,
                                 axes=(1,2,3),
                                 norm = 'forward').real
-        
-        # Remove numerical noise
-        # threshold = 1e-16
-        # F_solen[np.abs(F_solen) < threshold] = 0
-        # F_irrot[np.abs(F_irrot) < threshold] = 0
         
         return F_irrot, F_solen
 
