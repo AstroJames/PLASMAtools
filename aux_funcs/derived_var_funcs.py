@@ -825,7 +825,7 @@ class DerivedVars(ScalarOperations,
         return np.sum(
             np.array([self.d.gradient(scalar_field,
                                 gradient_dir       = coord,
-                                derivative_order   = 2, 
+                                derivative_order   = self.stencil, 
                                 boundary_condition = self.bcs[coord]) for coord in self.coords]),
             axis=0)
 
