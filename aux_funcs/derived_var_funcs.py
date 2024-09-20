@@ -65,7 +65,7 @@ class DerivedVars(ScalarOperations,
     """
     
     def __init__(self, 
-                 L              : float    = 1.0,
+                 L              : float    = [1.0,1.0,1.0],
                  stencil        : int      = 2,
                  bcs            : str      = "000",
                  mu0            : float    = 4*np.pi,
@@ -134,21 +134,18 @@ class DerivedVars(ScalarOperations,
         finite difference derivative.
         """
         self.stencil = stencil  
-        self.set_derivative(self.stencil,
-                            self.L)
+        self.set_derivative(self.stencil)
         
         
     def set_derivative(self,
-                       stencil : int,
-                       L       : float) -> None:
+                       stencil : int) -> None:
         """
         Set the stencil for the finite difference derivative.
         
         This function is used to change the stencil order of the 
         finite difference derivative.
         """
-        self.d = Derivative(stencil,
-                            L)
+        self.d = Derivative(stencil)
     
     
     def vector_potential(self,
@@ -203,12 +200,12 @@ class DerivedVars(ScalarOperations,
                                         axes=(1,2,3))
 
         # Assuming a cubic domain    
-        N = vector_field.shape[1]  
+        N = vector_field.shape  
                         
         # wave vectors
-        kx = 2 * np.pi * fft.fftfreq(N, d=self.L/N) / self.L
-        ky = 2 * np.pi * fft.fftfreq(N, d=self.L/N) / self.L
-        kz = 2 * np.pi * fft.fftfreq(N, d=self.L/N) / self.L
+        kx = 2 * np.pi * fft.fftfreq(N[1], d=self.L[0]/N[1]) / self.L[0]
+        ky = 2 * np.pi * fft.fftfreq(N[2], d=self.L[1]/N[2]) / self.L[1]
+        kz = 2 * np.pi * fft.fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
         
         kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
         k = np.array([kx,ky,kz]) # This will be of shape (3, N, N, N)
@@ -339,6 +336,7 @@ class DerivedVars(ScalarOperations,
         def compute_gradient(component_idx, coord):
             return self.d.gradient(vector_field[component_idx], 
                                    gradient_dir=coord, 
+                                   L=self.L[coord],
                                    boundary_condition=self.bcs[component_idx])
 
         #compute the gradient tensor in parallel
@@ -421,12 +419,15 @@ class DerivedVars(ScalarOperations,
         
         return np.array([vector_field_1[X] * self.d.gradient(vector_field_2[coord], 
                                                               gradient_dir=X, 
+                                                              L=self.L[X],
                                                               boundary_condition=self.bcs[X]) + 
                          vector_field_1[Y] * self.d.gradient(vector_field_2[coord], 
                                                               gradient_dir=Y, 
+                                                              L=self.L[Y],
                                                               boundary_condition=self.bcs[Y]) +
                          vector_field_1[Z] * self.d.gradient(vector_field_2[coord], 
                                                               gradient_dir=Z, 
+                                                              L=self.L[Z],
                                                               boundary_condition=self.bcs[Z]) for coord in self.coords])
                                       
 
@@ -651,11 +652,7 @@ class DerivedVars(ScalarOperations,
         
         """
     
-        
-        shape = vector_field.shape[:-1]
-        x     = np.linspace(-self.L/2.0,
-                            self.L/2.0,
-                            vector_field.shape[0]) # assuming a domian of [-L/2, L/2]
+        N = vector_field.shape
         
         # Fourier transform to Fourier space  
         if pyfftw_import:
@@ -672,12 +669,12 @@ class DerivedVars(ScalarOperations,
         # initialisations of the irrotational and solenoidal components
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
         Fhat_solen = np.zeros_like(Fhat, dtype=np.complex128)
-        ksqr       = np.zeros(shape, dtype=np.float64)
+        ksqr       = np.zeros_like(N, dtype=np.float64)
                 
         # Compute wave numbers
-        k = np.stack(np.meshgrid(2*np.pi * np.fft.fftfreq(shape[1]) * shape[1] / (x[-1] - x[0]),
-                                 2*np.pi * np.fft.fftfreq(shape[2]) * shape[2] / (x[-1] - x[0]),
-                                 2*np.pi * np.fft.fftfreq(shape[3]) * shape[3] / (x[-1] - x[0]),
+        k = np.stack(np.meshgrid(2*np.pi * np.fft.fftfreq(N[1]) * N[1] / self.L[X],
+                                 2*np.pi * np.fft.fftfreq(N[2]) * N[2] / self.L[Y],
+                                 2*np.pi * np.fft.fftfreq(N[3]) * N[3] / self.L[Z],
                                  indexing='ij'),
                      axis=0)
         
@@ -736,28 +733,39 @@ class DerivedVars(ScalarOperations,
                              0,
                              self.d.gradient(vector_field[Y],
                                 gradient_dir       = X,
+                                L                  = self.L[X],
                                 boundary_condition = self.bcs[X]) - 
                              self.d.gradient(vector_field[X],
                                 gradient_dir       = Y,
+                                L                   = self.L[Y],
                                 boundary_condition = self.bcs[Y])])
         elif self.num_of_dims == 3: 
+            
+            print(f"Computing 3D curl L={self.L}, L_y={self.L[Y]}")
+            
             return np.array([self.d.gradient(vector_field[Z],
                                 gradient_dir        = Y,
+                                L                   = self.L[Y],
                                 boundary_condition  = self.bcs[Y]) - 
                             self.d.gradient(vector_field[Y],
                                 gradient_dir        = Z,
+                                L                   = self.L[Z],
                                 boundary_condition  = self.bcs[Z]),
                             self.d.gradient(vector_field[X],
                                 gradient_dir        = Z,
+                                L                   = self.L[Z],
                                 boundary_condition  = self.bcs[Z]) -
                             self.d.gradient(vector_field[Z],
                                 gradient_dir        = X,
+                                L                   = self.L[X],
                                 boundary_condition  = self.bcs[X]),
                             self.d.gradient(vector_field[Y],
                                 gradient_dir        = X,
+                                L                   = self.L[X],
                                 boundary_condition  = self.bcs[X]) - 
                             self.d.gradient(vector_field[X],
                                 gradient_dir        = Y,
+                                L                   = self.L[Y],
                                 boundary_condition  = self.bcs[Y])])
     
 
@@ -781,6 +789,7 @@ class DerivedVars(ScalarOperations,
         return np.sum(
             np.array([self.d.gradient(vector_field[coord],
                                 gradient_dir       = coord,
+                                L                  = self.L[coord],
                                 boundary_condition = self.bcs[coord]) for coord in self.coords]),
             axis=0)
     
@@ -825,6 +834,7 @@ class DerivedVars(ScalarOperations,
         return np.sum(
             np.array([self.d.gradient(scalar_field,
                                 gradient_dir       = coord,
+                                L                  = self.L[coord],
                                 derivative_order   = self.stencil, 
                                 boundary_condition = self.bcs[coord]) for coord in self.coords]),
             axis=0)
@@ -848,7 +858,8 @@ class DerivedVars(ScalarOperations,
         """
 
         return np.array([self.d.gradient(scalar_field, 
-                                         gradient_dir = coord) 
+                                         gradient_dir = coord,
+                                         L            = self.L[coord]) 
                          for coord in self.coords])
 
 
