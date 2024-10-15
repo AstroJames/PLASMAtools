@@ -8,41 +8,44 @@ import numpy as np
 import numpy.polynomial.polynomial as poly
 import timeit
 from ..aux_funcs import derived_var_funcs as dvf
-import pandas as pd
+# import pandas as pd
 from joblib import Parallel, delayed
 
 ## ###############################################################
 ## Auxillary reading functions (can be jit compiled)
 ## ###############################################################
 
-from .read_FLASH    import  reformat_FLASH_field, unsort_flash_field
-from .read_BHAC     import  reformat_BHAC_field
-from .read_RAMSES   import  reformat_RAMSES_field
+from .read_FLASH        import  reformat_FLASH_field, unsort_flash_field
+from .read_BHAC_fast    import  reformat_BHAC_field
+from .read_RAMSES       import  reformat_RAMSES_field
 
 ## ###############################################################
 ## Global variabes
 ## ###############################################################
 
 field_lookup_type = {
-    "dens"      : "scalar",
-    "dvvl"      : "scalar",
-    "alpha"     : "scalar",
-    "vel"       : "vector",
-    "mag"       : "vector",
-    "tens"      : "vector",
-    "vort"      : "vector",
-    "mpr"       : "vector",
-    "tprs"      : "vector",
-    "cur"       : "vector",
-    "vxb"       : "vector",
-    "jxb"       : "vector",
-    "jxb_mag"   : "scalar",
-    "jdotb"     : "scalar"
+    "dens"      : "scalar", # mass density
+    "dvvl"      : "scalar", # 
+    "alpha"     : "scalar", # force free parameter
+    "vel"       : "vector", # velocity field
+    "mag"       : "vector", # magnetic field
+    "tens"      : "vector", # magnetic tension
+    "vort"      : "vector", # vorticity
+    "mpr"       : "vector", # magnetic pressure
+    "tprs"      : "vector", # thermal pressure
+    "cur"       : "vector", # electric current
+    "vxb"       : "vector", # ideal electric field (induction)
+    "jxb"       : "vector", # Lorentz force
+    "jxb_mag"   : "scalar", # mag of Lorentz force
+    "jdotb"     : "scalar", # current helicity
+    "pres"      : "scalar"
 }
 
 bhac_lookup_dict = {"vel"  : ["u1", "u2", "u3"],
                     "mag"  : ["b1", "b2", "b3"],
-                    "dens" : ["rho"]}
+                    "dens" : ["rho"],
+                    "press": ["p"],
+                    "elec" : ["e1", "e2", "e3"]}
 
 ## ###############################################################
 ## Classes
@@ -262,30 +265,30 @@ class Fields():
             # otherwise, preallocate the 1D arrays for the grid data
             init_field = np.zeros(self.n_cells, dtype=np.float32)
 
-        self.dens               = init_field
-        self.velx               = init_field
-        self.vely               = init_field
-        self.velz               = init_field
-        self.magx               = init_field
-        self.magy               = init_field
-        self.magz               = init_field
-        self.tensx              = init_field
-        self.tensy              = init_field
-        self.tensz              = init_field
-        self.vortx              = init_field
-        self.vorty              = init_field
-        self.vortz              = init_field   
-        self.curx               = init_field
-        self.cury               = init_field
-        self.curz               = init_field 
-        self.vxbx               = init_field
-        self.vxby               = init_field
-        self.vxbz               = init_field
-        self.alpha              = init_field
-        self.mXcx               = init_field
-        self.mXcy               = init_field
-        self.mXcz               = init_field
-        self.mXc_mag            = init_field
+        # self.dens               = init_field
+        # self.velx               = init_field
+        # self.vely               = init_field
+        # self.velz               = init_field
+        # self.magx               = init_field
+        # self.magy               = init_field
+        # self.magz               = init_field
+        # self.tensx              = init_field
+        # self.tensy              = init_field
+        # self.tensz              = init_field
+        # self.vortx              = init_field
+        # self.vorty              = init_field
+        # self.vortz              = init_field   
+        # self.curx               = init_field
+        # self.cury               = init_field
+        # self.curz               = init_field 
+        # self.vxbx               = init_field
+        # self.vxby               = init_field
+        # self.vxbz               = init_field
+        # self.alpha              = init_field
+        # self.mXcx               = init_field
+        # self.mXcy               = init_field
+        # self.mXcz               = init_field
+        # self.mXc_mag            = init_field
         
         # read in state (read in true or false if the reader
         # has actually been called -- this is all to save time 
@@ -438,27 +441,24 @@ class Fields():
         elif self.sim_data_type == "bhac":
             
             # now instantiate the bhac object
-            d = reformat_BHAC_field(file=self.filename)
+            d = reformat_BHAC_field(file_name=self.filename)
             
             # read in coordinates
             if field_lookup_type[field_str] == "scalar":
                  for var in bhac_lookup_dict[field_str]:
                      if interpolate:
-                        setattr(self, field_str, d.interpolate_uniform_grid(varname=var,
-                                                            N_grid_x=N_grid_x,
-                                                            N_grid_y=N_grid_y))
-                     else:
-                        setattr(self, field_str, d.uniform_grid(varname=var))              
-            elif field_lookup_type[field_str] == "vector":
-                
-                for var, coord in zip(bhac_lookup_dict[field_str],["x","y","z"]):
+                        setattr(self, field_str, d.interpolate_uniform_grid(var_name=var,
+                                                            n_grid_x=N_grid_x,
+                                                            n_grid_y=N_grid_y)) 
+                    # should add a method here for uniform grid          
+            elif field_lookup_type[field_str] == "vector": 
+                for var, coord in zip(bhac_lookup_dict[field_str],["x","y"]):
                     t1 = timeit.default_timer()
                     if interpolate:
-                        setattr(self, field_str + coord, d.interpolate_uniform_grid(varname=var,
-                                                            N_grid_x=N_grid_x,
-                                                            N_grid_y=N_grid_y))
-                    else:
-                        setattr(self, field_str + coord, d.uniform_grid(varname=var))
+                        setattr(self, field_str + coord, d.interpolate_uniform_grid(var_name=var,
+                                                            n_grid_x=N_grid_x,
+                                                            n_grid_y=N_grid_y))
+                        # should add a method here for uniform grid  
                     t2 = timeit.default_timer()
                     print(f"The total time it took is: {t2-t1}")
                
@@ -770,15 +770,15 @@ class PowerSpectra():
         # set self.names
         self.__set_power_spectra_header(field_str)
 
-        p_spec = pd.read_table(self.filename,
-                      names=self.names,
-                      skiprows=skip,
-                      sep=r"\s+")
-        self.power      = p_spec["#15_SpectFunctTot"].to_numpy()
-        self.power_trv  = p_spec["#13_SpectFunctTrv"].to_numpy()
-        self.power_lng  = p_spec["#11_SpectFunctLgt"].to_numpy()
-        self.power_norm = np.sum(self.power)
-        self.wavenumber = p_spec["#01_KStag"].to_numpy()
+        # p_spec = pd.read_table(self.filename,
+        #               names=self.names,
+        #               skiprows=skip,
+        #               sep=r"\s+")
+        # self.power      = p_spec["#15_SpectFunctTot"].to_numpy()
+        # self.power_trv  = p_spec["#13_SpectFunctTrv"].to_numpy()
+        # self.power_lng  = p_spec["#11_SpectFunctLgt"].to_numpy()
+        # self.power_norm = np.sum(self.power)
+        # self.wavenumber = p_spec["#01_KStag"].to_numpy()
         
         self.__compute_correlation_scale()
         self.__compute_micro_scale()
