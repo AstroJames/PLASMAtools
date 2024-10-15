@@ -20,8 +20,7 @@ class Derivative:
     """
     
     def __init__(self, 
-                 stencil : int = 2,
-                 boundary_condition: str = "periodic") -> None:
+                 stencil : int = 2) -> None:
         """
         Initialize the derivative class.
 
