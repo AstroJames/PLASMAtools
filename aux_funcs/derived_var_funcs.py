@@ -45,10 +45,6 @@ X,Y,Z = 0, 1, 2
 # vector fields : 3,N,N,N   (i, x, y, z)
 # tensor fields : M,M,N,N,N (i, j, x, y, z)
 
-# shifts for derivatives
-F = -1 # shift forwards
-B = +1 # shift backwards
-
 boundary_lookup = {0: 'periodic', 
                    1: 'neumann', 
                    2: 'dirichlet'}
@@ -98,8 +94,7 @@ class DerivedVars(ScalarOperations,
         self.num_of_dims    = num_of_dims                           # number of dimensions in the domain
         
         # create a derivative object to be shared globally
-        self.d = Derivative(self.stencil,
-                            self.L)
+        self.d = Derivative(self.stencil)
         
         # add the inherited classes
         ScalarOperations.__init__(self)
@@ -149,103 +144,229 @@ class DerivedVars(ScalarOperations,
     
     
     def vector_potential(self,
-                         vector_field   : np.ndarray,
-                         debug          : bool          = False) -> np.ndarray:
+                        vector_field   : np.ndarray,
+                        debug          : bool          = False):
         """
-        Create the underlying vector potential, a, of a vector field. For a magnetic field,
-        assuming a Coulomb Gauage (div(a) = 0), this is the vector potential that satisfies the equation:
+        Calculate the vector potential of a vector field in both 2D and 3D.
         
-        \nabla x b = \nabla x \nabla x a = \nabla (\nabla \cdot a) -\nabla^2 a,
-
-        \nabla \cdot a = 0,
-        
-        \nabla^2 a = -\nabla x b,
-        
-        where b is the magnetic field. In Fourier space:
-        
-        - k^2 \hat{a} = -i k \times \hat{b},
-        
-        \hat{a} = i \frac{k \times \hat{b}}{k^2},
-        
-        where k is the wavevector and \hat{a} is the Fourier transform of the vector potential, 
-        \hat{b} is the Fourier transform of the magnetic field, and i is the imaginary i = \sqrt{-1}.
-        
-        Hence a can be found by taking the inverse Fourier transform of \hat{a}.
-        
-        Author: James Beattie
+        Author:
+            James Beattie (2024)
 
         Args:
-            vector_field (np.ndarray)   : 3,N,N,N array of vector field, where 3 is the vector 
-                                            component and N is the number of grid points in each direction
-            debug (bool)                : debug flag for debugging the vector potential calculation. 
-                                            Default is False.
+            vector_field (np.ndarray): The input vector field. For 3D, it should be of shape (3, N, N, N);
+                                    for 2D, it should be of shape (2, N, N).
+            debug (bool): If True, returns the reconstructed vector field for debugging.
 
         Returns:
-            a (np.ndarray)       : 3,N,N,N array of vector potential, where 3 is the vector component and 
-                                    N is the number of grid points in each direction
-            b_recon (np.ndarray) : the original vector field reconstructed from the vector potential for debugging.
-        
+            if self.num_of_dims == 3 (three-dimensional):
+                a (np.ndarray): The vector potential of shape (3, N, N, N).
+                b_recon (np.ndarray, optional): The reconstructed vector field if debug is True.
+            if self.num_of_dims == 2 (two-dimensional):
+                psi (np.ndarray): The scalar potential of shape (N, N).
+                F_recon (np.ndarray, optional): The reconstructed vector field if debug is True.
         """
         
-        # Take FFT of vector field
-        if pyfftw_import:
-            vector_field_FFT = pyfftw.builders.fftn(vector_field,
-                                                    axes        = (1,2,3),
-                                                    norm        = 'forward',
-                                                    threads     = threads)
-            vector_field_FFT = vector_field_FFT()
-        else:
-            vector_field_FFT = fft.fftn(vector_field,
-                                        norm='forward',
-                                        axes=(1,2,3))
-
-        # Assuming a cubic domain    
+        # Assuming a cubic domain
         N = vector_field.shape  
-                        
-        # wave vectors
+
+        # Wave vectors
         kx = 2 * np.pi * fft.fftfreq(N[1], d=self.L[0]/N[1]) / self.L[0]
         ky = 2 * np.pi * fft.fftfreq(N[2], d=self.L[1]/N[2]) / self.L[1]
-        kz = 2 * np.pi * fft.fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
-        
-        kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
-        k = np.array([kx,ky,kz]) # This will be of shape (3, N, N, N)
+ 
+        if self.num_of_dims == 3:
+            # Existing 3D code
+            if pyfftw_import:
+                vector_field_FFT = pyfftw.builders.fftn(vector_field,
+                                                        axes        = (1,2,3),
+                                                        norm        = 'forward',
+                                                        threads     = threads)
+                vector_field_FFT = vector_field_FFT()
+            else:
+                vector_field_FFT = fft.fftn(vector_field,
+                                            norm='forward',
+                                            axes=(1,2,3))
 
-        # Normalize k to get the unit wavevector
-        k_norm = np.tile(np.linalg.norm(k, 
-                                        axis=0, 
-                                        keepdims=True), 
-                         (3, 1, 1, 1)) # This will be of shape (1, N, N, N)
+            # add extra dimension for 3D
+            kz = 2 * np.pi * fft.fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
+            
+            # create three dimensional mesh
+            kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
+            k = np.array([kx,ky,kz])  # Shape: (3, N, N, N)
+            
+            # Normalize k to get the unit wavevector
+            k_norm = np.tile(np.linalg.norm(k, 
+                                            axis=0, 
+                                            keepdims=True), 
+                            (3, 1, 1, 1)) # This will be of shape (1, N, N, N)
+            
+            k_norm[k_norm == 0] = np.inf  # Avoid division by zero
 
-        # Replace zeros in k_norm with np.inf to avoid division by zero
-        k_norm[k_norm == 0] = np.inf
-        
-        # Take the cross product of k and the vector field
-        # Take the inverse FFT to get the vector potential
-        if pyfftw_import:
-            a = np.real(pyfftw.builders.ifftn(1j * self.vector_cross_product(k,
-                                                                            vector_field_FFT) / k_norm**2, 
-                                              axes=(1, 2, 3),
-                                              threads=threads,
-                                              norm='forward'))
+            # Compute the vector potential in Fourier space
+            a_hat = 1j * self.vector_cross_product(k, vector_field_FFT) / k_norm**2
+
+            # Inverse FFT to get the vector potential in real space
+            if pyfftw_import:
+                a = np.real(pyfftw.builders.ifftn(a_hat,
+                                                  axes=(1,2,3),
+                                                  threads=threads,
+                                                  norm='forward')())
+            else:
+                a = np.real(fft.ifftn(a_hat,
+                                      axes=(1,2,3),
+                                      norm='forward'))
+
+            if debug:
+                # Reconstruct the vector field for debugging
+                self.set_stencil(4)
+                b_recon = self.vector_curl(a)  
+                self.set_stencil(2)
+                return a, b_recon
+            
+            return a
+
+        elif self.num_of_dims == 2:
+            # 2D code
+            if pyfftw_import:
+                vector_field_FFT = pyfftw.builders.fftn(vector_field,
+                                                        axes        = (1,2),
+                                                        norm        = 'forward',
+                                                        threads     = threads)
+                vector_field_FFT = vector_field_FFT()
+            else:
+                vector_field_FFT = fft.fftn(vector_field,
+                                            norm='forward',
+                                            axes=(1,2))
+
+            # create two dimensional mesh
+            kx, ky = np.meshgrid(kx, ky, indexing='ij')
+            k = np.array([kx,ky])
+            k_norm = np.sqrt(kx**2 + ky**2)
+            k_norm[k_norm == 0] = np.inf  # Avoid division by zero
+
+            # Compute the stream function in Fourier space
+            a_hat = 1j * self.vector_cross_product(k,vector_field_FFT) / k_norm**2
+
+            # Inverse FFT to get the scalar potential in real space
+            if pyfftw_import:
+                a = np.real(pyfftw.builders.ifftn(a_hat,
+                                                  axes=(0,1),
+                                                  threads=threads,
+                                                  norm='forward')())
+            else:
+                a = np.real(fft.ifftn(a_hat,
+                                      axes=(0,1),
+                                      norm='forward'))
+            
+            if debug: 
+                print(a.shape)
+                grad_a = self.scalar_gradient(a)
+                b_recon = np.array([grad_a[1],-grad_a[0]])
+                return a, b_recon
+
+            return a
+
         else:
-            a = np.real(fft.ifftn(1j * self.vector_cross_product(k,
-                                                                vector_field_FFT) / k_norm**2, 
-                                axes=(1, 2, 3),
-                                norm="forward"))
-        
-        # Take the curl of the vector potential to get the reconstructed magnetic field
-        # for debuging
-        if debug:
-            # Space holder for the reconstructed magnetic field
-            b_recon = np.zeros_like(vector_field)
-            # have to at least a fourth order derivative here 
-            # to get a good reconstruction
-            self.set_stencil(4)
-            b_recon = self.vector_curl(a)  
-            self.set_stencil(2)
-            return a, b_recon
-        
-        return a
+            raise ValueError("vector_field must have 2 or 3 components")
+
+
+    def vector_potential_3d(self,
+                            vector_field   : np.ndarray,
+                            debug          : bool          = False) -> np.ndarray:
+            """
+            Create the underlying vector potential, a, of a vector field. For a magnetic field,
+            assuming a Coulomb Gauage (div(a) = 0), this is the vector potential that satisfies the equation:
+            
+            \nabla x b = \nabla x \nabla x a = \nabla (\nabla \cdot a) -\nabla^2 a,
+
+            \nabla \cdot a = 0,
+            
+            \nabla^2 a = -\nabla x b,
+            
+            where b is the magnetic field. In Fourier space:
+            
+            - k^2 \hat{a} = -i k \times \hat{b},
+            
+            \hat{a} = i \frac{k \times \hat{b}}{k^2},
+            
+            where k is the wavevector and \hat{a} is the Fourier transform of the vector potential, 
+            \hat{b} is the Fourier transform of the magnetic field, and i is the imaginary i = \sqrt{-1}.
+            
+            Hence a can be found by taking the inverse Fourier transform of \hat{a}.
+            
+            Author: James Beattie
+
+            Args:
+                vector_field (np.ndarray)   : 3,N,N,N array of vector field, where 3 is the vector 
+                                                component and N is the number of grid points in each direction
+                debug (bool)                : debug flag for debugging the vector potential calculation. 
+                                                Default is False.
+
+            Returns:
+                a (np.ndarray)       : 3,N,N,N array of vector potential, where 3 is the vector component and 
+                                        N is the number of grid points in each direction
+                b_recon (np.ndarray) : the original vector field reconstructed from the vector potential for debugging.
+            
+            """
+            
+            # Take FFT of vector field
+            if pyfftw_import:
+                vector_field_FFT = pyfftw.builders.fftn(vector_field,
+                                                        axes        = (1,2,3),
+                                                        norm        = 'forward',
+                                                        threads     = threads)
+                vector_field_FFT = vector_field_FFT()
+            else:
+                vector_field_FFT = fft.fftn(vector_field,
+                                            norm='forward',
+                                            axes=(1,2,3))
+
+            # Assuming a cubic domain    
+            N = vector_field.shape  
+                            
+            # wave vectors
+            kx = 2 * np.pi * fft.fftfreq(N[1], d=self.L[0]/N[1]) / self.L[0]
+            ky = 2 * np.pi * fft.fftfreq(N[2], d=self.L[1]/N[2]) / self.L[1]
+            kz = 2 * np.pi * fft.fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
+            
+            kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
+            k = np.array([kx,ky,kz]) # This will be of shape (3, N, N, N)
+
+            # Normalize k to get the unit wavevector
+            k_norm = np.tile(np.linalg.norm(k, 
+                                            axis=0, 
+                                            keepdims=True), 
+                            (3, 1, 1, 1)) # This will be of shape (1, N, N, N)
+
+            # Replace zeros in k_norm with np.inf to avoid division by zero
+            k_norm[k_norm == 0] = np.inf
+            
+            # Take the cross product of k and the vector field
+            # Take the inverse FFT to get the vector potential
+            if pyfftw_import:
+                a = np.real(pyfftw.builders.ifftn(1j * self.vector_cross_product(k,
+                                                                                vector_field_FFT) / k_norm**2, 
+                                                axes=(1, 2, 3),
+                                                threads=threads,
+                                                norm='forward'))
+            else:
+                a = np.real(fft.ifftn(1j * self.vector_cross_product(k,
+                                                                    vector_field_FFT) / k_norm**2, 
+                                    axes=(1, 2, 3),
+                                    norm="forward"))
+            
+            # Take the curl of the vector potential to get the reconstructed magnetic field
+            # for debuging
+            if debug:
+                # Space holder for the reconstructed magnetic field
+                b_recon = np.zeros_like(vector_field)
+                # have to at least a fourth order derivative here 
+                # to get a good reconstruction
+                self.set_stencil(4)
+                b_recon = self.vector_curl(a)  
+                self.set_stencil(2)
+                return a, b_recon
+            
+            return a
 
 
     def magnetic_helicity(self,
