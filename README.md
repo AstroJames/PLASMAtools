@@ -60,7 +60,7 @@ The functions are:
 * magnetic energy transfer functions
 * kinetic - magnetic energy interaction transfer functions
 
-## Generating synethetic stochastic fields:
+## Generating synthetic stochastic fields:
 * generating chiral random field ( e.g. net j.b on system scale )
 * generating power-law random field
 
