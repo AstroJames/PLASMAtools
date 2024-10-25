@@ -1,6 +1,6 @@
 # Python tools for reading and manipulating plasma fluid simulations
 
-Utilises some MP parallelisation, and lots of vectorisation through the numpy library. 
+Utilises MP parallelisation, lots of vectorisation through the `numpy` library, and JIT compiling for I/O through `numba`.
 
 Currently the reading of FLASH data is handled by the `read.py` code, which has classes for particles and fields, and can read `FLASH`, `RAMSES` and `BHAC` simulation data. 
 
