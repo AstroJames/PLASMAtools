@@ -1,6 +1,6 @@
 # Python tools for reading and manipulating plasma fluid simulations
 
-Utilises some MP parallelisation, and lots of vectorisation through the numpy library. 
+Utilises MP parallelisation, lots of vectorisation through the `numpy` library, and JIT compiling for I/O through `numba`.
 
 Currently the reading of FLASH data is handled by the `read.py` code, which has classes for particles and fields, and can read `FLASH`, `RAMSES` and `BHAC` simulation data. 
 
@@ -51,18 +51,23 @@ The functions are:
 
 ## Spectral operations:
 * vector potential ( via fft in Coloumb gauge )
-* 3D vector power spectrum
+* 3D vector sclar power spectrum
+* 3D vector field power spectrum
 * 3D tensor field power spectrum
 * spherical shell binning
 * cylindrical shell binning
 * k space filtering through isotropic k shells ( for transfer function analysis )
+* k space filtering through cylindrical k shells ( for transfer function analysis )
+
+## Generating synthetic stochastic fields:
+* generating chiral random field ( e.g. net j.b on system scale )
+* generating power-law random field
+
+## Energy flux transfer functions:
 * kinetic energy transfer functions
 * magnetic energy transfer functions
 * kinetic - magnetic energy interaction transfer functions
-
-## Generating synethetic stochastic fields:
-* generating chiral random field ( e.g. net j.b on system scale )
-* generating power-law random field
+* helmholtz decomposed transfer functions
 
 ## Functionality coming to the repo.
 * transfer functions are currently utilising functionality from repo, but not properly incorporated in repo.
