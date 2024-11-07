@@ -266,7 +266,7 @@ class DerivedVars(ScalarOperations,
             return a
 
         else:
-            raise ValueError("vector_field must have 2 or 3 components")
+            raise ValueError("vector_f ield must have 2 or 3 components")
 
 
     def vector_potential_3d(self,
@@ -860,10 +860,7 @@ class DerivedVars(ScalarOperations,
                                 gradient_dir       = Y,
                                 L                   = self.L[Y],
                                 boundary_condition = self.bcs[Y])])
-        elif self.num_of_dims == 3: 
-            
-            print(f"Computing 3D curl L={self.L}, L_y={self.L[Y]}")
-            
+        elif self.num_of_dims == 3:             
             return np.array([self.d.gradient(vector_field[Z],
                                 gradient_dir        = Y,
                                 L                   = self.L[Y],
