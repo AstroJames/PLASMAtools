@@ -1,7 +1,7 @@
 """
     Title: Power Spectra Funcs
     Author: James R. Beattie
-    Date: 09/07/2017
+    Date: 09/07/2019
     Description: Functions for calculating fourier variables in the read_flash classes
 
     Collaborators: Anne Noer Kolborg
@@ -212,6 +212,10 @@ def helical_decomposition(vector_field):
     Returns:
     u_plus (array): The component of the vector field in the direction of the right-handed helical component.
     u_minus (array): The component of the vector field in the direction of the left-handed helical component.
+    
+    
+    TODO: this whole function needs to be updated to conform to 3,N,N,N vecotr fields instead of
+          N,N,N,3 vector fields
     """
     # Convert inputs to numpy arrays
     vector_field = np.asarray(vector_field)
