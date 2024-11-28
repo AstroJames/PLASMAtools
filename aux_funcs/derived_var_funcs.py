@@ -850,16 +850,14 @@ class DerivedVars(ScalarOperations,
         if self.num_of_dims == 1:
             ValueError("Vector curl is not defined for 1D.")
         elif self.num_of_dims == 2:
-            return np.array([0,
-                             0,
-                             self.d.gradient(vector_field[Y],
+            return  self.d.gradient(vector_field[Y],
                                 gradient_dir       = X,
                                 L                  = self.L[X],
-                                boundary_condition = self.bcs[X]) - 
-                             self.d.gradient(vector_field[X],
-                                gradient_dir       = Y,
-                                L                   = self.L[Y],
-                                boundary_condition = self.bcs[Y])])
+                                boundary_condition = self.bcs[X]) - \
+            self.d.gradient(vector_field[X],
+                            gradient_dir       = Y,
+                            L                   = self.L[Y],
+                            boundary_condition = self.bcs[Y])
         elif self.num_of_dims == 3:             
             return np.array([self.d.gradient(vector_field[Z],
                                 gradient_dir        = Y,
