@@ -37,7 +37,6 @@ class VectorOperations:
             vector mag (np.ndarray): N,N,N array of vector cross product of the two vectors
         
         """
-        vector_field = np.array(vector_field)
         
         return np.sqrt(self.vector_dot_product(vector_field,
                                                 vector_field))
