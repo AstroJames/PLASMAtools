@@ -20,6 +20,7 @@ except ImportError:
 ## Auxillary reading functions (can be jit compiled)
 ## ###############################################################            
 
+## TODO: current JIT only working with sort_flash_field, and not with unsort_flash_field
 
 def sort_flash_field(field    : np.ndarray,
                      nxb      : int,
@@ -56,10 +57,10 @@ def unsort_flash_field(field_sorted : np.ndarray,
                        kprocs       : int) -> np.ndarray:
 
     # Swap the axes to get the correct orientation
-    field_sorted = np.transpose(field_sorted,(2,1,0))
+    field_sorted = np.transpose(field_sorted,(2,1,0)).astype(np.float32)
     
     # Calculate the total number of blocks
-    total_blocks = iprocs * jprocs * kprocs
+    total_blocks = np.int32(iprocs * jprocs * kprocs)
         
     # Initialise an empty (core, block_x, block_y, block_z) field
     field_unsorted = np.zeros((total_blocks, 
@@ -69,12 +70,12 @@ def unsort_flash_field(field_sorted : np.ndarray,
                               dtype=np.float32)
 
     # The block counter for looping through blocks
-    block_counter = 0
+    block_counter = np.int32(0)
 
     # Unsort the sorted field
-    for j in range(jprocs):
-        for k in range(kprocs):
-            for i in range(iprocs):
+    for j in range(np.int32(jprocs)):
+        for k in range(np.int32(kprocs)):
+            for i in range(np.int32(iprocs)):
                 field_unsorted[block_counter, :, :, :] = field_sorted[j*nyb:(j+1)*nyb, k*nzb:(k+1)*nzb, i*nxb:(i+1)*nxb]
                 block_counter += 1
                 
@@ -87,8 +88,8 @@ if NUMBA_AVAILABLE:
                              fastmath  = True, 
                              nogil     = True)(sort_flash_field)
     
-    unsort_flash_field = njit('float32[:,:,:,:](float32[:,:,:], int64, int64, int64, int64, int64, int64)',
-                              parallel  = True, 
+    unsort_flash_field = njit('float32[:,:,:,:](float32[:,:,:], int32, int32, int32, int32, int32, int32)',
+                              parallel  = False, 
                               fastmath  = True,
                               nogil     = True)(unsort_flash_field)
 
