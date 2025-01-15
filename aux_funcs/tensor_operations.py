@@ -28,7 +28,6 @@ class TensorOperations:
         return np.sqrt(self.tensor_double_contraction(tensor_field,
                                                       tensor_field))
     
-
     def tensor_double_contraction_ij_ij(self,
                                         tensor_field_0 : np.ndarray,
                                         tensor_field_1 : np.ndarray) -> np.ndarray:
