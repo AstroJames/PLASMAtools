@@ -265,13 +265,13 @@ class Fields():
         g.close()
         
         # read out properties of the grid
-        self.n_cores  = self.int_scalars["globalnumblocks"]
-        self.nxb      = self.int_scalars["nxb"]
-        self.nyb      = self.int_scalars["nyb"]
-        self.nzb      = self.int_scalars["nzb"]
-        self.iprocs   = self.int_properties["iprocs"]
-        self.jprocs   = self.int_properties["jprocs"]
-        self.kprocs   = self.int_properties["kprocs"]
+        self.n_cores  = np.int32(self.int_scalars["globalnumblocks"])
+        self.nxb      = np.int32(self.int_scalars["nxb"])
+        self.nyb      = np.int32(self.int_scalars["nyb"])
+        self.nzb      = np.int32(self.int_scalars["nzb"])
+        self.iprocs   = np.int32(self.int_properties["iprocs"])
+        self.jprocs   = np.int32(self.int_properties["jprocs"])
+        self.kprocs   = np.int32(self.int_properties["kprocs"])
         self.n_cells  = self.n_cores*self.nxb*self.nyb*self.nzb
         self.plot_file_num = self.int_scalars["plotfilenumber"]
 
@@ -297,6 +297,7 @@ class Fields():
              N_grid_x           : int  = 256,
              N_grid_y           : int  = 256,
              N_grid_z           : int  = 256) -> None:
+        
         """
         This function reads in grid data.
         
