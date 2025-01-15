@@ -535,7 +535,12 @@ class DerivedVars(ScalarOperations,
                                    vector_field_1 : np.ndarray,
                                    vector_field_2 : np.ndarray) -> np.ndarray:
         """
-
+        u_j \partial_j u_i
+        
+        Compute the dot product of a vector field with the gradient tensor 
+        of another vector field. This is used to compute transfers functions 
+        of the nonlinear terms in the Navier-Stokes equations.
+        
         """
         
         return np.array([vector_field_1[X] * self.d.gradient(vector_field_2[coord], 
