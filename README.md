@@ -83,7 +83,7 @@ The functions are:
 * vectorised implementation of line integral convolution algorithm. Works very fast, even up to (10k)^2 grids.
 
 ## Critial point analysis
-* 
+* o and x point detector based on vector potential / stream function. Only works in 2D. 
 
 ## Functionality coming to the repo.
 * faster, mpi parallelised ffts for large mem. jobs, specifically important for transfer functions.
