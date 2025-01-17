@@ -54,7 +54,35 @@ def compute_power_spectrum_3D(field: np.ndarray) -> np.ndarray:
                             norm='forward'),
                 axes=(1, 2, 3)))**2,
         axis=0)
+
+def compute_power_spectrum_2D(field: np.ndarray) -> np.ndarray:
+    """
+    Computes the power spectrum of a 2D vector field. Note the norm = "forward" 
+    in the Fourier transform. This means that the power spectrum will be scaled by
+    the number of grid points 1/N^3, and the inverse transform will be scaled by
+    N^3.
+
+    Args:
+        volume (np.ndarray): 2D scalar field for which to compute the power spectrum
+
+    Returns:
+        power_spectrum_2D (np.ndarray): 2D power spectrum of the input volume
+    """
     
+    # the field should be i,N,N (i is the coordinate)
+    assert len(field.shape) == 3, "Field should be 2D"
+        
+    # Compute the Fourier Transform and shift zero frequency component to center,
+    # then sum all the square components to get the power spectrum   
+    return np.sum(
+        np.abs(
+            np.fft.fftshift(
+                np.fft.fftn(field,
+                            axes=(1, 2),
+                            norm='forward'),
+                axes=(1, 2)))**2,
+        axis=0)    
+
 def compute_tensor_power_spectrum(field: np.ndarray) -> np.ndarray:
     """
     Computes the power spectrum of a 3D tensor field. Note the norm = "forward" 
@@ -119,6 +147,49 @@ def spherical_integrate(data: np.ndarray,
     z, y, x = np.indices(data.shape)
     center = np.array([(i - 1) / 2.0 for i in data.shape])
     r = np.sqrt((x - center[0])**2 + (y - center[1])**2 + (z - center[2])**2)
+
+    N = data.shape[0]
+    if not bins:
+        bins = N // 2
+
+    bin_edges = np.linspace(0.5, bins, bins+1)
+
+    # Use np.digitize to assign each element to a bin
+    bin_indices = np.digitize(r, bin_edges)
+
+    # Compute the radial profile
+    radial_sum = np.zeros(bins)
+    for i in range(1, bins+1):
+        mask = bin_indices == i
+        radial_sum[i-1] = np.sum(data[mask])
+
+    # Generate the spatial frequencies with dk=1
+    # Now k_modes represent the bin centers
+    k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
+
+    return k_modes, radial_sum
+
+
+def spherical_integrate_2D(data: np.ndarray, 
+                           bins: int = None) -> tuple:
+    """
+    The spherical integrate function takes the 2D power spectrum and integrates
+    over spherical shells of constant k. The result is a 1D power spectrum.
+    
+    Needs to be tested in detail
+    
+    Args:
+        data: The 2D power spectrum
+        bins: The number of bins to use for the radial integration. 
+              If not specified, the Nyquist limit is used (as should always be the case, anyway).
+
+    Returns:
+        k_modes: The k modes corresponding to the radial integration
+        radial_sum: The radial integration of the 3D power spectrum (including k^2 correction)
+    """
+    y, x = np.indices(data.shape)
+    center = np.array([(i - 1) / 2.0 for i in data.shape])
+    r = np.sqrt((x - center[0])**2 + (y - center[1])**2)
 
     N = data.shape[0]
     if not bins:
