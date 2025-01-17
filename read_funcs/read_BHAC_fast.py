@@ -8,6 +8,10 @@ from scipy.interpolate import griddata
 class reformat_BHAC_field():
     """
     Class to reformat the BHAC field to the correct format for the BHAC class.
+
+    Class functions based on Michael Grehan's implentation of a fast BHAC reader.
+    Thanks Michael! 
+
     """
     
     def __init__(self,
