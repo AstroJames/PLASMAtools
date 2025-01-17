@@ -1,6 +1,6 @@
 # Python tools for reading and manipulating plasma fluid simulations
 
-Utilises MP parallelisation, lots of vectorisation through the `numpy` library, JIT compiling for I/O through `numba`, and `joblib` for any trivial parallelisation. There are a number of FFTs the library can use, depending upon what is available. The fastest (by a factor of a few) is `pyfftw`. Currently I am working on MPI implemtnations for both FFT and derivative class, which is invaluable for large mem. jobs with more than (1k^3) cells.
+Utilises MP parallelisation, lots of vectorisation through the `numpy` library, JIT compiling for I/O through `numba`, and `joblib` for any trivial parallelisation. There are a number of FFTs the library can use, depending upon what is available. The fastest (by a factor of a few) is `pyfftw`. Currently I am working on MPI implmentations for both FFT and derivative class, which is invaluable for large mem. jobs with more than (1k^3) cells.
 
 Currently the reading of FLASH data is handled by the `read.py` code, which has classes for particles and fields, and can read `FLASH`, `RAMSES` and `BHAC` simulation data. 
 
