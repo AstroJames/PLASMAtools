@@ -557,8 +557,93 @@ def extract_isotropic_shell_X(vector_field: np.ndarray,
         shell_k = Gauss_filter(k_norm,(k_minus_dk+k_plus_dk)/2.0) * vector_field_FFT
     
     # Inverse FFT with just the wavenumbers from the shell 
-    shell_real = np.fft.ifftn(shell_k,
+    return np.fft.ifftn(shell_k,
                            axes=(1,2,3),
                            norm="forward").real
-     
-    return shell_real
+
+
+def extract_shell_X_2D(vector_field    : np.ndarray,
+                       k_minus_dk      : float,
+                       k_plus_dk       : float,
+                       L               : list = [1.0,1.0] ) -> np.ndarray:
+    """
+    Extract and return the inverse FFT of a specific shell of a vector field.
+
+    This method extracts the components of a vector field that fall within a 
+    specified wavenumber shell, defined by the range `k_minus_dk < k < k_plus_dk`. 
+    The shell is selected based on the direction specified in `self.direction` 
+    ('parallel', 'perp', or 'iso'), and the inverse FFT of the filtered shell 
+    is computed and returned.
+    
+    Author: James Beattie & Anne Noer Kolborg
+
+    Args:
+        vector_field (np.ndarray): The input vector field to be filtered and 
+                                transformed. It is assumed to be a 3D field.
+        k_minus_dk (float): The lower bound of the wavenumber shell.
+        k_plus_dk (float): The upper bound of the wavenumber shell.
+
+    Returns:
+        np.ndarray: The inverse FFT of the filtered vector field, limited to 
+                    the specified wavenumber shell.
+
+    Raises:
+        Assertion error: If the input vector field is not 3D.
+        ValueError: If `self.direction` is not recognized. Valid options are: 
+                    'parallel', 'perp', 'iso'.
+
+    Workflow:
+        1. The method first determines the type of filter to apply based on 
+        `self.direction`. The filter type is either 'parallel', 'perp', 
+        or 'iso', corresponding to different wavenumber components.
+        2. It then creates a mask using the filter, selecting the wavenumbers 
+        that fall within the specified range (`k_minus_dk` to `k_plus_dk`).
+        3. The vector field is transformed into Fourier space using `fftn`.
+        4. The mask is applied to isolate the desired wavenumber components.
+        5. The inverse FFT (`ifftn`) of the masked field is computed and returned.
+
+    Example:
+        # Example usage to extract a shell and compute the inverse FFT:
+        filtered_field = self.extract_shell_X(vector_field, 0.5, 1.5)
+
+    Notes:
+        - The method assumes that `self.kx`, `self.ky`, and `self.kz` have been 
+        initialized and correspond to the wavenumbers of the grid.
+        - The extracted shell is in the form of a 3D numpy array, and the output 
+        is also a 3D numpy array representing the spatial domain.
+
+    References:
+        This method is based on the transfer function code by Philip Grete:
+        https://github.com/pgrete/energy-transfer-analysis
+    """
+    
+    #assert np.shape(vector_field)[0] == 2, "Error: Vector field must be 2D."
+    
+    N = vector_field.shape
+    kx = 2 * np.pi * fft.fftfreq(N, d=L[0]/N[0]) / L[0]
+    ky = 2 * np.pi * fft.fftfreq(N, d=L[1]/N[1]) / L[1]
+    
+    def filter(kmin, kmax, kx, ky, filter_type):
+        kx, ky = np.meshgrid(kx, ky, indexing='ij')
+        # Define filter types
+        filters = {
+            'twod': np.sqrt(kx**2 + ky**2),
+        }
+        # Calculate the filter
+        k_filter = filters[filter_type]
+        mask = np.logical_and(k_filter >= kmin, k_filter <= kmax)
+        return np.array([mask.astype(float), mask.astype(float)])
+
+    # Inverse FFT with just the wavenumbers from the shell 
+    return np.real(
+        np.fft.ifftn(
+            filter(k_minus_dk, 
+                   k_plus_dk, 
+                   kx, 
+                   ky, 
+                   'twod') * np.fft.fftn(
+                vector_field,
+                norm='forward',
+                axes=(1, 2)),
+            axes=(1, 2),
+            norm="forward"))
