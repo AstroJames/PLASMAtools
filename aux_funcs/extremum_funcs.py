@@ -31,7 +31,7 @@ class Extremum():
                  radius_min   : float   = 0.0,
                  radius_max   : float   = 0.05,
                  n_steps_in_integration : int = 500,
-                 n_steps_in_limit_cycle : int = 1500) -> None:
+                 n_steps_in_limit_cycle : int = 10):#1500) -> None:
         
         # General class attributes
         self.debug        = debug
@@ -308,6 +308,7 @@ class Extremum():
                                             "y"     : y[self.n_steps_in_integration//2:]}            
             if periodic:
                 # append the entire limit cycle information
+                print("__compute_region_statistics: periodic")
                 o_point_list.append(limit_cycle_info)
 
                 # append only the statistics that will be used in the csv
@@ -339,7 +340,8 @@ class Extremum():
             "type"  : "x_point"})
                 
         # Create DataFrame from the list of dictionaries
-        df = pd.DataFrame(self.o_point_stats)
+        print(local_stats_list)
+        df = pd.DataFrame(local_stats_list)
 
         # Save the DataFrame to a CSV file
         df.to_csv(f"{self.output_label}_local_statistics.csv",
@@ -350,7 +352,7 @@ def main():
     data_path   = "/Users/beattijr/Documents/Research/2024/test_BHAC/data/data0075.vtu"
     read        = False
     N_grid      = 2048 
-    sigma       = 1.0
+    sigma       = 10.0
     sim         = Fields(data_path,
                          sim_data_type="bhac")
     L = 1.0
@@ -373,7 +375,7 @@ def main():
                            sigma=sigma,
                            phase_plot=True)  
     
-    data = pd.read_csv("data0075_O_point_statistics.csv")    
+    data = pd.read_csv("data0075_local_statistics.csv")    
     dvf = dv.DerivedVars(bcs="00",
                          num_of_dims=2)
     
