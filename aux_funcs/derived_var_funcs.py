@@ -914,6 +914,33 @@ class DerivedVars(ScalarOperations,
                                 boundary_condition = self.bcs[coord]) for coord in self.coords]),
             axis=0)
     
+    
+    def heating_rate(self,
+                     pressure_scalar_field : np.ndarray,
+                     velocity_vector_field : np.ndarray) -> np.ndarray:
+        """
+        Compute the heating rate of a given species:
+        \dot{Q} = - P \nabla . u
+        
+        Author: James Beattie
+        
+        Args:
+            pressure_scalar_field (np.ndarray)   : N,N,N array of scalar field,
+                                                    where N is the number of grid points in each direction
+            velocity_vector_field (np.ndarray)   : 3,N,N,N array of vector field,
+                                                    where 3 is the vector component and N is the number of grid points in each direction    
+                                                    
+                                                    
+        Returns:
+        
+            heating rate (float) 
+        
+        """
+        
+        return - np.mean(pressure_scalar_field[X] *
+                         self.vector_divergence(velocity_vector_field))
+        
+        
 
     def vector_laplacian(self,
                          vector_field : np.ndarray) -> np.ndarray:
