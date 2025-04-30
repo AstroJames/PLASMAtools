@@ -28,7 +28,7 @@ except ImportError:
 pyfftw_import = False
 
 # import derivative stencils
-from .derivatives import Derivative
+from .derivatives_numba import Derivative
 from .tensor_operations import TensorOperations
 from .vector_operations import VectorOperations
 from .scalar_operations import ScalarOperations
@@ -430,48 +430,54 @@ class DerivedVars(ScalarOperations,
         return np.array([self.vector_dot_product(
             self.vector_curl(magnetic_vector_field) / self.mu0,
             magnetic_vector_field)])
-    
-
+   
     def gradient_tensor(self, 
                         vector_field: np.ndarray) -> np.ndarray:
         """
-        Compute the gradient tensor of a vector field using finite differences and
-        multiple threads.
+        Compute the gradient tensor of a vector field.
+        The gradient tensor is defined as:
+        
+        \partial_i f_j
+        
+        where f is the vector field and i,j are the indices of the tensor.
         
         Author: James Beattie
-
+        
         Args:
-            vector_field (np.ndarray): 3,N,N,N array of vector field, 
-                                        where 3 is the vector component and N is the number of grid 
-                                        points in each direction
-
+        
+            vector_field (np.ndarray): M,N,N,N array of vector field, where M is the vector 
+            component and N is the number of grid points in each direction
+            
         Returns:
-            gradient_tensor: the gradient tensor of the vector field, 
-            \partial_i f_j
+        
+            grad_tensors (np.ndarray): M,M,N,N,N array of gradient tensor, where M,M is the 
+            tensor component and N is the number of grid points in each direction
+            
+        
         """
         
-        # initialise the gradient tensor
         grad_tensors = np.empty((self.num_of_dims, self.num_of_dims) + vector_field.shape[1:])
         
-        # a single component of the gradient tensor
-        def compute_gradient(component_idx, coord):
-            return self.d.gradient(vector_field[component_idx], 
-                                   gradient_dir=coord, 
-                                   L=self.L[coord],
-                                   boundary_condition=self.bcs[component_idx])
-
-        #compute the gradient tensor in parallel
-        with ThreadPoolExecutor() as executor:
-            futures = {}
-            for i in range(self.num_of_dims):
-                for j, coord in enumerate(self.coords):
-                    futures[(i, j)] = executor.submit(compute_gradient, i, coord)
-
-            for (i, j), future in futures.items():
-                grad_tensors[i, j] = future.result()
-        
-        return self.tensor_transpose(grad_tensors)
+        for i in range(self.num_of_dims):
+            for j, coord in enumerate(self.coords):
+                grad_tensors[i, j] = self.d.gradient(
+                    vector_field[i],
+                    gradient_dir=coord,
+                    L=self.L[coord],
+                    boundary_condition=self.bcs[i]
+                )
+        return self.tensor_transpose(grad_tensors) 
     
+    
+    def gradient_tensor_fast(self,
+                             vector_field: np.ndarray) -> np.ndarray:
+        """
+        Compute the gradient tensor of a vector field, fast.
+        """
+        
+        return(self.d.gradient_tensor_fast(vector_field,
+                                           self.L[X]))
+
         
     def orthogonal_tensor_decomposition(self,
                                         tensor_field    : np.ndarray,
@@ -982,7 +988,7 @@ class DerivedVars(ScalarOperations,
             np.array([self.d.gradient(scalar_field,
                                 gradient_dir       = coord,
                                 L                  = self.L[coord],
-                                derivative_order   = self.stencil, 
+                                derivative_order   = 2, 
                                 boundary_condition = self.bcs[coord]) for coord in self.coords]),
             axis=0)
 
