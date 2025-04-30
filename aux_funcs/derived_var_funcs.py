@@ -925,7 +925,7 @@ class DerivedVars(ScalarOperations,
         Author: James Beattie
         
         Args:
-            pressure_scalar_field (np.ndarray)   : N,N,N array of scalar field,
+            pressure_scalar_field (np.ndarray)   : 1,N,N,N array of scalar field,
                                                     where N is the number of grid points in each direction
             velocity_vector_field (np.ndarray)   : 3,N,N,N array of vector field,
                                                     where 3 is the vector component and N is the number of grid points in each direction    
