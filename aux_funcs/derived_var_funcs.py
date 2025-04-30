@@ -941,7 +941,6 @@ class DerivedVars(ScalarOperations,
                          self.vector_divergence(velocity_vector_field))
         
         
-
     def vector_laplacian(self,
                          vector_field : np.ndarray) -> np.ndarray:
         """
