@@ -40,10 +40,10 @@ def sort_flash_field(field    : np.ndarray,
     block_counter = 0
 
     # Sort the unsorted field
-    for j in range(jprocs):
-        for k in range(kprocs):
+    for k in range(kprocs):
+        for j in range(jprocs):
             for i in range(iprocs):
-                field_sorted[j*nyb:(j+1)*nyb, k*nzb:(k+1)*nzb, i*nxb:(i+1)*nxb] = field[block_counter, :, :, :]
+                field_sorted[k*nzb:(k+1)*nzb, j*nyb:(j+1)*nyb, i*nxb:(i+1)*nxb] = field[block_counter, :, :, :]
                 block_counter += 1
     return field_sorted
 
@@ -73,10 +73,10 @@ def unsort_flash_field(field_sorted : np.ndarray,
     block_counter = np.int32(0)
 
     # Unsort the sorted field
-    for j in range(np.int32(jprocs)):
-        for k in range(np.int32(kprocs)):
+    for k in range(np.int32(kprocs)):
+        for j in range(np.int32(jprocs)):
             for i in range(np.int32(iprocs)):
-                field_unsorted[block_counter, :, :, :] = field_sorted[j*nyb:(j+1)*nyb, k*nzb:(k+1)*nzb, i*nxb:(i+1)*nxb]
+                field_unsorted[block_counter, :, :, :] = field_sorted[k*nzb:(k+1)*nzb, j*nyb:(j+1)*nyb, i*nxb:(i+1)*nxb]
                 block_counter += 1
                 
     return field_unsorted
