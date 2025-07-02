@@ -636,9 +636,9 @@ class DerivedVars(ScalarOperations,
                     
             # magnetic baroclinic term, 1/\rho^2 \nabla \rho \times \nabla b^2 / 2\mu_0
             baroclinic_magnetic = (1./density_scalar_field[X]**2) * self.vector_cross_product(
-                self.scalar_gradient(self.vector_dot_product(magnetic_vector_field,
-                                                             magnetic_vector_field) / (2 * self.mu0)),
-                self.scalar_gradient(density_scalar_field[X]))
+                self.scalar_gradient(np.array([self.vector_dot_product(magnetic_vector_field,
+                                                             magnetic_vector_field) / (2 * self.mu0)])),
+                self.scalar_gradient(density_scalar_field))
             
             # magnetic tension term 1/\mu_0 \nabla \times (1/\rho) b . \nabla b)
             tension = self.vector_curl(
@@ -652,8 +652,8 @@ class DerivedVars(ScalarOperations,
             
             # baroclinic term, 1/\rho^2 \nabla p \times \nabla \rho
             baroclinic = (1/ density_scalar_field[X]**2) * self.vector_cross_product(
-                self.scalar_gradient(pressure_scalar_field[X]),
-                self.scalar_gradient(density_scalar_field[X])
+                self.scalar_gradient(pressure_scalar_field),
+                self.scalar_gradient(density_scalar_field)
                 )
             
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
@@ -926,7 +926,7 @@ class DerivedVars(ScalarOperations,
                      velocity_vector_field : np.ndarray) -> np.ndarray:
         """
         Compute the heating rate of a given species:
-        \dot{Q} = - P \nabla . u
+        \dot{Q} = - <P \nabla . u>
         
         Author: James Beattie
         
@@ -985,7 +985,7 @@ class DerivedVars(ScalarOperations,
         
         # compute and return the laplacian with arbitrary boundary conditions
         return np.sum(
-            np.array([self.d.gradient(scalar_field,
+            np.array([self.d.gradient(scalar_field[0],
                                 gradient_dir       = coord,
                                 L                  = self.L[coord],
                                 derivative_order   = 2, 
@@ -1010,7 +1010,7 @@ class DerivedVars(ScalarOperations,
         
         """
 
-        return np.array([self.d.gradient(scalar_field, 
+        return np.array([self.d.gradient(scalar_field[0], 
                                          gradient_dir = coord,
                                          L            = self.L[coord]) 
                          for coord in self.coords])
