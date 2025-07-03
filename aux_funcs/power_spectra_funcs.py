@@ -13,17 +13,20 @@
 
 import numpy as np
 import multiprocessing
+
+pyfftw_import = False
 try: 
     import pyfftw
     pyfftw_import = True
     pyfftw.interfaces.cache.enable()
     threads = multiprocessing.cpu_count()
+    print(f"power_spectra_funcs: Using {threads} threads for FFTs with pyfftw.")
 except ImportError:
     print("pyfftw not installed, using scipy's serial fft")
-pyfftw_import = False
 
 if pyfftw_import:
     # Use pyfftw for faster FFTs if available
+    pyfftw.config.NUM_THREADS = threads
     fftn = pyfftw.interfaces.numpy_fft.fftn
     ifftn = pyfftw.interfaces.numpy_fft.ifftn
     fftfreq = pyfftw.interfaces.numpy_fft.fftfreq
@@ -278,7 +281,8 @@ def cylindrical_integrate(data: np.ndarray,
     
     # Ensure that the length matches the expected size
     cylindrical_sum = cylindrical_sum[:bins_perp * bins_para]
-    cylindrical_sum = cylindrical_sum.reshape((bins_perp, bins_para))
+    cylindrical_sum = cylindrical_sum.reshape((bins_perp, bins_para),
+                                              order='F')
     # k_perp are in the first axis, k_par are in the second axis
     k_perp_modes    = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
     k_para_modes    = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
@@ -467,9 +471,10 @@ def generate_isotropic_powerlaw_field(size:  int,
 
     return np.fft.ifftn(adjusted_field).real
 
-def generate_anisotropic_powerlaw_field(size:  int,
-                                        alpha: float = 5./3.,
-                                        beta:  float = 5./3.) -> np.ndarray:
+def generate_anisotropic_powerlaw_field(N:      int,
+                                        alpha:  float = 5./3.,
+                                        beta:   float = 5./3.,
+                                        L:      float = 1.0) -> np.ndarray:
     """
     This computes a random field with a power-law power spectrum. The power spectrum
     is P(k) = k_perp^-alpha k_parallel^-beta. The field is generated in Fourier space, 
@@ -478,37 +483,48 @@ def generate_anisotropic_powerlaw_field(size:  int,
     Author: James Beattie
 
     Args:
-        size (int): the linear dimension of the 3D field
+        N (int): the linear dimension of the 3D field
         alpha (float): the negative 1D power-law exponent used in Fourier space for the 
                         perpendicular component. Defaults to 5/3.
                         Note that I make the transformations between 3D Fourier transform 
                         exponent and 1D power spectrum exponent in the code.
         beta (float): the negative 1D power-law exponent used in Fourier space for the 
                         parallel component. Defaults to 5/3.
+        L (float): the physical size of the domain. Defaults to 1.0.
 
     Returns:
         ifft field (np.ndarray): the inverse fft of the random field with a power-law power spectrum
     """
+    
     # Create a grid of frequencies
-    kx = fftfreq(size)
-    ky = fftfreq(size)
-    kz = fftfreq(size)
+    kx = np.fft.fftfreq(N)
+    ky = np.fft.fftfreq(N)
+    kz = np.fft.rfftfreq(N)   
     
     kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
     
     # Calculate the magnitude of k for each frequency component
     k_perp              = np.sqrt(kx**2 + ky**2)
     k_par               = np.abs(kz)
-    k_perp[k_perp==0]   = 1   # Avoid division by zero
-    k_par[k_par==0]     = 1    # Avoid division by zero
+    k_perp[k_perp==0]   = np.inf   # Avoid division by zero
+    k_par[k_par==0]     = np.inf   # Avoid division by zero
     
-    # Create a 3D grid of random complex numbers for phases
-    random_field = np.random.randn(size, size, size) + 1j * np.random.randn(size, size, size)
     
     # Adjust the amplitude of each frequency component to follow k^-5/3 (-11/3 in 3D)
-    amplitude = k_perp**(-(alpha)/2.0)*k_par**(-(beta)/2.0)
+    amplitude = k_perp**(-(alpha+1.0)/2.0)*k_par**(-beta/2.0)
 
-    return np.fft.ifftn(10*random_field * amplitude).real
+    # Create a 3D grid of random complex numbers for phases
+    rphase = np.exp(2j*np.pi*np.random.rand(*amplitude.shape))
+    
+    Fhalf = 10*rphase * amplitude
+    Fhalf[0,0,0] = 0.0  # Set the zero mode to zero to avoid DC component
+    
+    # build full cube via Hermitian symmetry
+    F = np.zeros((N, N, N), dtype=complex)
+    F[:, :, :N//2+1] = Fhalf
+    F[:, :, N//2+1:] = np.conj(Fhalf[:, :, 1:N//2][..., ::-1])
+
+    return np.fft.ifftn(F,norm="forward").real
 
 def extract_isotropic_shell_X(vector_field: np.ndarray,
                               k_minus_dk:   float,
