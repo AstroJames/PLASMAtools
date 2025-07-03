@@ -14,10 +14,11 @@
 ## ###############################################################
 
 # python dependencies
-import scipy.fft as fft
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+
+pyfftw_import = False
 try: 
     import pyfftw
     pyfftw_import = True
@@ -25,7 +26,20 @@ try:
     threads = multiprocessing.cpu_count()
 except ImportError:
     print("pyfftw not installed, using scipy's serial fft")
-pyfftw_import = False
+
+if pyfftw_import:
+    # Use pyfftw for faster FFTs if available
+    pyfftw.config.NUM_THREADS = threads
+    fftn = pyfftw.interfaces.numpy_fft.fftn
+    ifftn = pyfftw.interfaces.numpy_fft.ifftn
+    fftfreq = pyfftw.interfaces.numpy_fft.fftfreq
+    fftshift = pyfftw.interfaces.numpy_fft.fftshift
+else:
+    # Use numpy's FFT functions
+    fftn = np.fft.fftn
+    ifftn = np.fft.ifftn
+    fftfreq = np.fft.fftfreq
+    fftshift = np.fft.fftshift
 
 # import derivative stencils
 from .derivatives_numba import Derivative
@@ -170,24 +184,12 @@ class DerivedVars(ScalarOperations,
         N = vector_field.shape  
 
         # Wave vectors
-        kx = 2 * np.pi * fft.fftfreq(N[1], d=self.L[0]/N[1]) / self.L[0]
-        ky = 2 * np.pi * fft.fftfreq(N[2], d=self.L[1]/N[2]) / self.L[1]
+        kx = 2 * np.pi * fftfreq(N[1], d=self.L[0]/N[1]) / self.L[0]
+        ky = 2 * np.pi * fftfreq(N[2], d=self.L[1]/N[2]) / self.L[1]
  
         if self.num_of_dims == 3:
-            # Existing 3D code
-            if pyfftw_import:
-                vector_field_FFT = pyfftw.builders.fftn(vector_field,
-                                                        axes        = (1,2,3),
-                                                        norm        = 'forward',
-                                                        threads     = threads)
-                vector_field_FFT = vector_field_FFT()
-            else:
-                vector_field_FFT = fft.fftn(vector_field,
-                                            norm='forward',
-                                            axes=(1,2,3))
-
             # add extra dimension for 3D
-            kz = 2 * np.pi * fft.fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
+            kz = 2 * np.pi * fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
             
             # create three dimensional mesh
             kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
@@ -202,18 +204,15 @@ class DerivedVars(ScalarOperations,
             k_norm[k_norm == 0] = np.inf  # Avoid division by zero
 
             # Compute the vector potential in Fourier space
-            a_hat = 1j * self.vector_cross_product(k, vector_field_FFT) / k_norm**2
+            a_hat = 1j * self.vector_cross_product(k, fftn(vector_field,
+                                                           axes = (1,2,3),
+                                                           norm = 'forward')) / k_norm**2
 
             # Inverse FFT to get the vector potential in real space
-            if pyfftw_import:
-                a = np.real(pyfftw.builders.ifftn(a_hat,
-                                                  axes=(1,2,3),
-                                                  threads=threads,
-                                                  norm='forward')())
-            else:
-                a = np.real(fft.ifftn(a_hat,
-                                      axes=(1,2,3),
-                                      norm='forward'))
+            a = np.real(ifftn(a_hat,
+                              axes=(1,2,3),
+                              norm='forward'))
+
 
             if debug:
                 # Reconstruct the vector field for debugging
@@ -225,18 +224,6 @@ class DerivedVars(ScalarOperations,
             return a
 
         elif self.num_of_dims == 2:
-            # 2D code
-            if pyfftw_import:
-                vector_field_FFT = pyfftw.builders.fftn(vector_field,
-                                                        axes        = (1,2),
-                                                        norm        = 'forward',
-                                                        threads     = threads)
-                vector_field_FFT = vector_field_FFT()
-            else:
-                vector_field_FFT = fft.fftn(vector_field,
-                                            norm='forward',
-                                            axes=(1,2))
-
             # create two dimensional mesh
             kx, ky = np.meshgrid(kx, ky, indexing='ij')
             k = np.array([kx,ky])
@@ -244,18 +231,14 @@ class DerivedVars(ScalarOperations,
             k_norm[k_norm == 0] = np.inf  # Avoid division by zero
 
             # Compute the stream function in Fourier space
-            a_hat = 1j * self.vector_cross_product(k,vector_field_FFT) / k_norm**2
+            a_hat = 1j * self.vector_cross_product(k,fftn(vector_field,
+                                                          axes = (1,2),
+                                                          norm = 'forward')) / k_norm**2
 
             # Inverse FFT to get the scalar potential in real space
-            if pyfftw_import:
-                a = np.real(pyfftw.builders.ifftn(a_hat,
-                                                  axes=(0,1),
-                                                  threads=threads,
-                                                  norm='forward')())
-            else:
-                a = np.real(fft.ifftn(a_hat,
-                                      axes=(0,1),
-                                      norm='forward'))
+            a = np.real(ifftn(a_hat,
+                              axes=(0,1),
+                              norm='forward'))
             
             if debug: 
                 print(a.shape)
@@ -267,106 +250,6 @@ class DerivedVars(ScalarOperations,
 
         else:
             raise ValueError("vector_f ield must have 2 or 3 components")
-
-
-    def vector_potential_3d(self,
-                            vector_field   : np.ndarray,
-                            debug          : bool          = False) -> np.ndarray:
-            """
-            Create the underlying vector potential, a, of a vector field. For a magnetic field,
-            assuming a Coulomb Gauage (div(a) = 0), this is the vector potential that satisfies the equation:
-            
-            \nabla x b = \nabla x \nabla x a = \nabla (\nabla \cdot a) -\nabla^2 a,
-
-            \nabla \cdot a = 0,
-            
-            \nabla^2 a = -\nabla x b,
-            
-            where b is the magnetic field. In Fourier space:
-            
-            - k^2 \hat{a} = -i k \times \hat{b},
-            
-            \hat{a} = i \frac{k \times \hat{b}}{k^2},
-            
-            where k is the wavevector and \hat{a} is the Fourier transform of the vector potential, 
-            \hat{b} is the Fourier transform of the magnetic field, and i is the imaginary i = \sqrt{-1}.
-            
-            Hence a can be found by taking the inverse Fourier transform of \hat{a}.
-            
-            Author: James Beattie
-
-            Args:
-                vector_field (np.ndarray)   : 3,N,N,N array of vector field, where 3 is the vector 
-                                                component and N is the number of grid points in each direction
-                debug (bool)                : debug flag for debugging the vector potential calculation. 
-                                                Default is False.
-
-            Returns:
-                a (np.ndarray)       : 3,N,N,N array of vector potential, where 3 is the vector component and 
-                                        N is the number of grid points in each direction
-                b_recon (np.ndarray) : the original vector field reconstructed from the vector potential for debugging.
-            
-            """
-            
-            # Take FFT of vector field
-            if pyfftw_import:
-                vector_field_FFT = pyfftw.builders.fftn(vector_field,
-                                                        axes        = (1,2,3),
-                                                        norm        = 'forward',
-                                                        threads     = threads)
-                vector_field_FFT = vector_field_FFT()
-            else:
-                vector_field_FFT = fft.fftn(vector_field,
-                                            norm='forward',
-                                            axes=(1,2,3))
-
-            # Assuming a cubic domain    
-            N = vector_field.shape  
-                            
-            # wave vectors
-            kx = 2 * np.pi * fft.fftfreq(N[1], d=self.L[0]/N[1]) / self.L[0]
-            ky = 2 * np.pi * fft.fftfreq(N[2], d=self.L[1]/N[2]) / self.L[1]
-            kz = 2 * np.pi * fft.fftfreq(N[3], d=self.L[2]/N[3]) / self.L[2]
-            
-            kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
-            k = np.array([kx,ky,kz]) # This will be of shape (3, N, N, N)
-
-            # Normalize k to get the unit wavevector
-            k_norm = np.tile(np.linalg.norm(k, 
-                                            axis=0, 
-                                            keepdims=True), 
-                            (3, 1, 1, 1)) # This will be of shape (1, N, N, N)
-
-            # Replace zeros in k_norm with np.inf to avoid division by zero
-            k_norm[k_norm == 0] = np.inf
-            
-            # Take the cross product of k and the vector field
-            # Take the inverse FFT to get the vector potential
-            if pyfftw_import:
-                a = np.real(pyfftw.builders.ifftn(1j * self.vector_cross_product(k,
-                                                                                vector_field_FFT) / k_norm**2, 
-                                                axes=(1, 2, 3),
-                                                threads=threads,
-                                                norm='forward'))
-            else:
-                a = np.real(fft.ifftn(1j * self.vector_cross_product(k,
-                                                                    vector_field_FFT) / k_norm**2, 
-                                    axes=(1, 2, 3),
-                                    norm="forward"))
-            
-            # Take the curl of the vector potential to get the reconstructed magnetic field
-            # for debuging
-            if debug:
-                # Space holder for the reconstructed magnetic field
-                b_recon = np.zeros_like(vector_field)
-                # have to at least a fourth order derivative here 
-                # to get a good reconstruction
-                self.set_stencil(4)
-                b_recon = self.vector_curl(a)  
-                self.set_stencil(2)
-                return a, b_recon
-            
-            return a
 
 
     def magnetic_helicity(self,
@@ -430,6 +313,7 @@ class DerivedVars(ScalarOperations,
         return np.array([self.vector_dot_product(
             self.vector_curl(magnetic_vector_field) / self.mu0,
             magnetic_vector_field)])
+   
    
     def gradient_tensor(self, 
                         vector_field: np.ndarray) -> np.ndarray:
@@ -787,16 +671,11 @@ class DerivedVars(ScalarOperations,
         N = vector_field.shape
         
         # Fourier transform to Fourier space  
-        if pyfftw_import:
-            Fhat = pyfftw.builders.fftn(vector_field,
-                                        axes=(1, 2, 3),
-                                        norm='forward',
-                                        threads=threads)
-            Fhat = Fhat()
-        else:    
-            Fhat = fft.fftn(vector_field,
-                            axes=(1, 2, 3),
-                            norm = 'forward')
+
+        Fhat = fftn(vector_field,
+                    axes=(1, 2, 3),
+                    norm='forward',
+                    threads=threads)
             
         # initialisations of the irrotational and solenoidal components
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
@@ -804,9 +683,9 @@ class DerivedVars(ScalarOperations,
         ksqr       = np.zeros_like(N, dtype=np.float64)
                 
         # Compute wave numbers
-        k = np.stack(np.meshgrid(2*np.pi * np.fft.fftfreq(N[1]) * N[1] / self.L[X],
-                                 2*np.pi * np.fft.fftfreq(N[2]) * N[2] / self.L[Y],
-                                 2*np.pi * np.fft.fftfreq(N[3]) * N[3] / self.L[Z],
+        k = np.stack(np.meshgrid(2*np.pi * fftfreq(N[1]) * N[1] / self.L[X],
+                                 2*np.pi * fftfreq(N[2]) * N[2] / self.L[Y],
+                                 2*np.pi * fftfreq(N[3]) * N[3] / self.L[Z],
                                  indexing='ij'),
                      axis=0)
         
@@ -814,29 +693,14 @@ class DerivedVars(ScalarOperations,
         ksqr = self.vector_dot_product(k,k)
         ksqr[0, 0, 0] = 1
         
-        # Compute irrotational and solenoidal components in Fourier space
-        Fhat_irrot =  self.vector_dot_product(k,Fhat) * k / ksqr 
-        Fhat_solen = Fhat - Fhat_irrot #curlFhat
-        
+        # Compute irrotational and solenoidal components in Fourier space and
         # Inverse Fourier transform to real space
-        if pyfftw_import:
-            F_irrot = pyfftw.builders.ifftn(Fhat_irrot,
-                                            axes=(1, 2, 3),
-                                            threads=threads,
-                                            norm='forward')
-            F_solen = pyfftw.builders.ifftn(Fhat_solen,
-                                            axes=(1, 2, 3),
-                                            threads=threads,
-                                            norm='forward')
-            F_irrot = np.real(F_irrot())
-            F_solen = np.real(F_solen())
-        else:            
-            F_irrot = fft.ifftn(Fhat_irrot,
-                                axes=(1,2,3),
-                                norm = 'forward').real
-            F_solen = fft.ifftn(Fhat_solen,
-                                axes=(1,2,3),
-                                norm = 'forward').real
+        F_irrot = np.real(ifftn(self.vector_dot_product(k,Fhat) * k / ksqr,
+                                axes=(1, 2, 3),
+                                norm='forward'))
+        F_solen = np.real(ifftn(Fhat - Fhat_irrot,
+                                axes=(1, 2, 3),
+                                norm='forward'))
         
         return F_irrot, F_solen
 
