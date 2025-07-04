@@ -13,6 +13,8 @@
 
 import numpy as np
 import multiprocessing
+from numba import jit, prange, float32, float64, int64, types
+import numba
 
 pyfftw_import = False
 try: 
@@ -20,7 +22,6 @@ try:
     pyfftw_import = True
     pyfftw.interfaces.cache.enable()
     threads = multiprocessing.cpu_count()
-    print(f"power_spectra_funcs: Using {threads} threads for FFTs with pyfftw.")
 except ImportError:
     print("pyfftw not installed, using scipy's serial fft")
 
@@ -132,59 +133,6 @@ def compute_tensor_power_spectrum(field: np.ndarray) -> np.ndarray:
                     norm='forward')))**2,
         axis=(0,1))
 
-
-def spherical_integrate(data: np.ndarray, 
-                        bins: int = None) -> tuple:
-    """
-    The spherical integrate function takes the 3D power spectrum and integrates
-    over spherical shells of constant k. The result is a 1D power spectrum.
-    
-    It has been tested to reproduce the 1D power spectrum of an input 3D Gaussian
-    random field.
-    
-    It has been tested to maintain the correct normalisation of the power spectrum
-    i.e., the integral over the spectrum. For small grids (number of bins) the normalisation
-    will be off by a small amount (roughly factor 2 for 128^3 with postive power-law indexes). 
-    This is because the frequencies beyond the Nyquist limit are not included in the radial 
-    integration. This is not a problem for grids of 256^3 or larger, or for k^-a style spectra,
-    which are far more commonly encountered, and the normalisation is closer to 1/10,000 numerical
-    error
-    
-    Args:
-        data: The 3D power spectrum
-        bins: The number of bins to use for the radial integration. 
-              If not specified, the Nyquist limit is used (as should always be the case, anyway).
-
-    Returns:
-        k_modes: The k modes corresponding to the radial integration
-        radial_sum: The radial integration of the 3D power spectrum (including k^2 correction)
-    """
-    z, y, x = np.indices(data.shape)
-    center = np.array([(i - 1) / 2.0 for i in data.shape])
-    r = np.sqrt((x - center[0])**2 + (y - center[1])**2 + (z - center[2])**2)
-
-    N = data.shape[0]
-    if not bins:
-        bins = N // 2
-
-    bin_edges = np.linspace(0.5, bins, bins+1)
-
-    # Use np.digitize to assign each element to a bin
-    bin_indices = np.digitize(r, bin_edges)
-
-    # Compute the radial profile
-    radial_sum = np.zeros(bins)
-    for i in range(1, bins+1):
-        mask = bin_indices == i
-        radial_sum[i-1] = np.sum(data[mask])
-
-    # Generate the spatial frequencies with dk=1
-    # Now k_modes represent the bin centers
-    k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
-
-    return k_modes, radial_sum
-
-
 def spherical_integrate_2D(data: np.ndarray, 
                            bins: int = None) -> tuple:
     """
@@ -225,6 +173,119 @@ def spherical_integrate_2D(data: np.ndarray,
     # Now k_modes represent the bin centers
     k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
 
+    return k_modes, radial_sum
+
+@jit(types.float64[:,:,:](types.UniTuple(types.int64, 3)),
+     nopython=True, parallel=True)
+def compute_radial_distances(shape):
+    """
+    Parallel computation of radial distances from center
+    """
+    nz, ny, nx = shape
+    center_z = (nz - 1) / 2.0
+    center_y = (ny - 1) / 2.0
+    center_x = (nx - 1) / 2.0
+    
+    r = np.empty(shape, dtype=np.float64)
+    
+    for z in prange(nz):
+        for y in range(ny):
+            for x in range(nx):
+                dz = z - center_z
+                dy = y - center_y
+                dx = x - center_x
+                r[z, y, x] = np.sqrt(dz*dz + dy*dy + dx*dx)
+    return r
+
+@jit([float32[:](float32[:,:,:], float32[:,:,:], float32[:], int64),
+      float64[:](float64[:,:,:], float64[:,:,:], float64[:], int64)],
+     nopython=True, parallel=True)
+def spherical_integrate_core_full_parallel(data,
+                                           r,
+                                           bin_edges,
+                                           bins):
+    """
+    Fully parallel version using thread-local accumulation
+    """
+    data_flat = data.ravel()
+    r_flat = r.ravel()
+    n_elements = len(data_flat)
+    n_edges = len(bin_edges)
+    
+    # Get number of threads
+    n_threads = numba.config.NUMBA_NUM_THREADS
+    
+    # Create thread-local accumulators with matching dtype
+    local_sums = np.zeros((n_threads, bins), dtype=data.dtype)
+    
+    # Parallel binning and accumulation
+    for i in prange(n_elements):
+        r_val = r_flat[i]
+        
+        # Compute bin index
+        if r_val < bin_edges[0]:
+            bin_idx = 0
+        elif r_val >= bin_edges[-1]:
+            bin_idx = n_edges
+        else:
+            left = 0
+            right = n_edges - 1
+            
+            while left < right:
+                mid = (left + right) // 2
+                if r_val < bin_edges[mid]:
+                    right = mid
+                else:
+                    left = mid + 1
+            
+            bin_idx = left
+        
+        # Accumulate into thread-local array
+        if 1 <= bin_idx <= bins:
+            thread_id = numba.get_thread_id()
+            local_sums[thread_id, bin_idx - 1] += data_flat[i]
+    
+    # Merge thread-local results with matching dtype
+    radial_sum = np.zeros(bins, dtype=data.dtype)
+    for i in range(bins):
+        for t in range(n_threads):
+            radial_sum[i] += local_sums[t, i]
+    
+    return radial_sum
+
+def spherical_integrate(data: np.ndarray, 
+                        bins: int = None) -> tuple:
+    """
+    Integrates the 3D power spectrum over spherical shells of constant k.
+    
+    Args:
+        data: The 3D power spectrum
+        bins: The number of bins to use for the radial integration. 
+              If not specified, the Nyquist limit is used (as should always be the case, anyway).
+    Returns:
+        k_modes: The k modes corresponding to the radial integration
+        radial_sum: The radial integration of the 3D power spectrum (including k^2 correction)
+        
+    Note:
+        This function uses a fully parallelized core function to compute the radial distances
+        and perform the integration. It is designed to be efficient for large datasets.
+    """
+    
+    N = data.shape[0]
+    if not bins:
+        bins = N // 2
+    
+    # Compute radial distances in parallel
+    r = compute_radial_distances(data.shape)
+    
+    bin_edges = np.linspace(0.5, bins, bins + 1)
+    
+    # Use the fully parallel core function
+    radial_sum = spherical_integrate_core_full_parallel(data, r, bin_edges, bins)
+    
+    # Generate the spatial frequencies with dk=1
+    k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
+    
     return k_modes, radial_sum
 
 def cylindrical_integrate(data: np.ndarray, 
