@@ -17,6 +17,7 @@
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+from typing import Tuple, Optional, Union
 
 pyfftw_import = False
 try: 
@@ -284,7 +285,7 @@ class DerivedVars(ScalarOperations,
             velocity_vector_field (np.ndarray): 3,N,N,N array of vector field,
             
         Returns:
-            kinetic helicity (np.ndarray): N,N,N array of kinetic helicity (\omega . v).
+            kinetic helicity (np.ndarray): N,N,N array of kinetic helicity (omega . v).
         
         """
         
@@ -314,118 +315,23 @@ class DerivedVars(ScalarOperations,
             self.vector_curl(magnetic_vector_field) / self.mu0,
             magnetic_vector_field)])
    
-   
-    def gradient_tensor(self, 
+       
+    def gradient_tensor(self,
                         vector_field: np.ndarray) -> np.ndarray:
-        """
-        Compute the gradient tensor of a vector field.
-        The gradient tensor is defined as:
-        
-        \partial_i f_j
-        
-        where f is the vector field and i,j are the indices of the tensor.
-        
-        Author: James Beattie
-        
-        Args:
-        
-            vector_field (np.ndarray): M,N,N,N array of vector field, where M is the vector 
-            component and N is the number of grid points in each direction
-            
-        Returns:
-        
-            grad_tensors (np.ndarray): M,M,N,N,N array of gradient tensor, where M,M is the 
-            tensor component and N is the number of grid points in each direction
-            
-        
-        """
-        
-        grad_tensors = np.empty((self.num_of_dims, self.num_of_dims) + vector_field.shape[1:])
-        
-        for i in range(self.num_of_dims):
-            for j, coord in enumerate(self.coords):
-                grad_tensors[i, j] = self.d.gradient(
-                    vector_field[i],
-                    gradient_dir=coord,
-                    L=self.L[coord],
-                    boundary_condition=self.bcs[i]
-                )
-        return self.tensor_transpose(grad_tensors) 
-    
-    
-    def gradient_tensor_fast(self,
-                             vector_field: np.ndarray) -> np.ndarray:
         """
         Compute the gradient tensor of a vector field, fast.
         """
         
-        return(self.d.gradient_tensor_fast(vector_field,
-                                           self.L[X]))
+        return self.d.gradient_tensor_fast(vector_field,
+                                           self.L[X])
 
-        
-    def orthogonal_tensor_decomposition(self,
-                                        tensor_field    : np.ndarray,
-                                        sym             : bool = False,
-                                        asym            : bool = False,
-                                        bulk            : bool = False,
-                                        all             : bool = False ) -> np.ndarray:
-        """
-        Compute the symmetric, anti-symmetric and bulk components of a rank 2 tensor field.
-        
-        Consider a gradient tensor of the form:
-        
-        \partial_i f_j,
-        
-        then is has a symmetric component:
-        
-        \partial_i f_j = 0.5 ( \partial_i f_j + \partial_j f_i ) - 1/3 \delta_{ij} \partial_k f_k,
-        
-        an anti-symmetric component:
-        
-        \partial_i f_j = 0.5 ( \partial_i f_j - \partial_j f_i ),
-        
-        and a trace component:
-        
-        \partial_i f_j = 1/3 \delta_{ij} \partial_k f_k.
-        
-        Author: James Beattie
-
-        Args:
-            tensor_field (np.ndarray): M,M,N,N,N array of tensor field, where M,M are the tensor components 
-
-        Returns:
-            sym_tensor (np.ndarray) : M,M,N,N,N array of symmetric tensor field.
-            tensor_anti (np.ndarray): M,M,N,N,N array of anti-symmetric tensor field.
-            tensor_bulk (np.ndarray): M,M,N,N,N array of trace tensor field.
-        """
-        
-        # bulk component
-        if sym or bulk or all:
-            tensor_bulk = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
-                                                            np.einsum("ii...",tensor_field),
-                                                            np.identity(self.num_of_dims))
-        
-        # symmetric component
-        if sym:
-            return 0.5 * (tensor_field + self.tensor_transpose(tensor_field)) - tensor_bulk
-        
-        # anti-symmetric component
-        if asym:
-            return 0.5 * (tensor_field - self.tensor_transpose(tensor_field))
-        
-        if bulk:
-            return tensor_bulk
-        
-        if all:
-            tensor_transpose = self.tensor_transpose(tensor_field)
-            return 0.5 * (tensor_field + tensor_transpose) - tensor_bulk, 0.5 * (tensor_field - tensor_transpose), tensor_bulk
 
 
     def vector_dot_gradient_tensor(self,
                                    vector_field_1 : np.ndarray,
                                    vector_field_2 : np.ndarray) -> np.ndarray:
         """
-        u_j \partial_j u_i
+        u_j partial_j u_i
         
         Compute the dot product of a vector field with the gradient tensor 
         of another vector field. This is used to compute transfers functions 
@@ -457,25 +363,25 @@ class DerivedVars(ScalarOperations,
         Compute the terms in the vorticity equation, including the compressive, stretching, baroclinic,
         baroclinic magnetic, and tension terms. The magnetised (ideal) vorticity equation is given by:
         
-        \frac{D \omega}{Dt} = - (\nabla . u) \omega + \omega . \nabla u +
-            \frac{1}{\rho^2} \nabla p \times \nabla \rho + 
-            \frac{1}{\rho^2} \nabla \rho \times \nabla b^2 / 2\mu_0 + 
-            \nabla \times (1/\rho) b . \nabla b / \mu_0,
+        frac{D omega}{Dt} = - (nabla . u) omega + omega . nabla u +
+            frac{1}{rho^2} nabla p times nabla rho + 
+            frac{1}{rho^2} nabla rho times nabla b^2 / 2mu_0 + 
+            nabla times (1/rho) b . nabla b / mu_0,
             
-        where \omega = \nabla \times u is the vorticity, u is the velocity field, p is the pressure field,
-        \rho is the density field, and b is the magnetic field and D/Dt is the Lagrangian derivative. 
+        where omega = nabla times u is the vorticity, u is the velocity field, p is the pressure field,
+        rho is the density field, and b is the magnetic field and D/Dt is the Lagrangian derivative. 
         
         The terms are:
         
-        compression term            : - (\nabla . u) \omega,
-        stretching term             : \omega . \nabla u,
-        baroclinic term             : 1/\rho^2 \nabla p \times \nabla \rho,
-        baroclinic magnetic term    : 1/\rho^2 \nabla \rho \times \nabla b^2 / 2\mu_0,
-        tension term                : 1/\mu_0 \nabla \times (1/\rho) b . \nabla b.
+        compression term            : - (nabla . u) omega,
+        stretching term             : omega . nabla u,
+        baroclinic term             : 1/rho^2 nabla p times nabla rho,
+        baroclinic magnetic term    : 1/rho^2 nabla rho times nabla b^2 / 2mu_0,
+        tension term                : 1/mu_0 nabla times (1/rho) b . nabla b.
         
         hence the vorticity equation can be written as:
         
-        \frac{D \omega}{Dt} = compression + stretching + baroclinic + baroclinic_magnetic + tension.
+        frac{D omega}{Dt} = compression + stretching + baroclinic + baroclinic_magnetic + tension.
 
         Author:
             James Beattie
@@ -502,13 +408,13 @@ class DerivedVars(ScalarOperations,
         
         # now construct the terms in the vorticity equation
         
-        # compute the vorticity, \omega = \nabla \times u
+        # compute the vorticity, omega = nabla \times u
         omega = self.vector_curl(velocity_vector_field)
         
-        # vorticity compression term, - (2/3) (\nabla . u) \omega
+        # vorticity compression term, - (2/3) (nabla . u) omega
         compress = - 2.0 * omega/3.0 * self.vector_divergence(velocity_vector_field)   
         
-        # vortex stretching term, \omega . \nabla u
+        # vortex stretching term, omega . nabla u
         grad_u =  self.gradient_tensor(velocity_vector_field)
         tensor_trace = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
                                                             np.einsum("ii...",grad_u),
@@ -518,7 +424,7 @@ class DerivedVars(ScalarOperations,
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
                     
-            # magnetic baroclinic term, 1/\rho^2 \nabla \rho \times \nabla b^2 / 2\mu_0
+            # magnetic baroclinic term, 1/rho^2 nabla rho \times nabla b^2 / 2mu_0
             baroclinic_magnetic = (1./density_scalar_field[X]**2) * self.vector_cross_product(
                 self.scalar_gradient(np.array([self.vector_dot_product(magnetic_vector_field,
                                                              magnetic_vector_field) / (2 * self.mu0)])),
@@ -674,8 +580,7 @@ class DerivedVars(ScalarOperations,
 
         Fhat = fftn(vector_field,
                     axes=(1, 2, 3),
-                    norm='forward',
-                    threads=threads)
+                    norm='forward')
             
         # initialisations of the irrotational and solenoidal components
         Fhat_irrot = np.zeros_like(Fhat, dtype=np.complex128)
@@ -705,84 +610,42 @@ class DerivedVars(ScalarOperations,
         return F_irrot, F_solen
 
 
-    def vector_curl(self,
-                    vector_field : np.ndarray) -> np.ndarray:
+    def vector_curl(self, vector_field: np.ndarray) -> np.ndarray:
         """
-        Compute the curl of a vector field (assumes periodic boundary conditions).
-        
-        Author: James Beattie
-        
-        Args:
-            vector_field (np.ndarray)   : 3,N,N,N array of vector field,
-                                            where 3 is the vector component and N is the number of grid
-                                            points in each direction
-            
-        Returns:
-            curl vector field (np.ndarray) : 3,N,N,N array of curl of the vector field
-        
+        Optimized curl computation using fused kernel
         """
-        
         if self.num_of_dims == 1:
-            ValueError("Vector curl is not defined for 1D.")
+            raise ValueError("Vector curl is not defined for 1D.")
         elif self.num_of_dims == 2:
-            return  self.d.gradient(vector_field[Y],
-                                gradient_dir       = X,
-                                L                  = self.L[X],
-                                boundary_condition = self.bcs[X]) - \
-            self.d.gradient(vector_field[X],
-                            gradient_dir       = Y,
-                            L                   = self.L[Y],
-                            boundary_condition = self.bcs[Y])
-        elif self.num_of_dims == 3:             
-            return np.array([self.d.gradient(vector_field[Z],
-                                gradient_dir        = Y,
-                                L                   = self.L[Y],
-                                boundary_condition  = self.bcs[Y]) - 
-                            self.d.gradient(vector_field[Y],
-                                gradient_dir        = Z,
-                                L                   = self.L[Z],
-                                boundary_condition  = self.bcs[Z]),
-                            self.d.gradient(vector_field[X],
-                                gradient_dir        = Z,
-                                L                   = self.L[Z],
-                                boundary_condition  = self.bcs[Z]) -
-                            self.d.gradient(vector_field[Z],
-                                gradient_dir        = X,
-                                L                   = self.L[X],
-                                boundary_condition  = self.bcs[X]),
-                            self.d.gradient(vector_field[Y],
-                                gradient_dir        = X,
-                                L                   = self.L[X],
-                                boundary_condition  = self.bcs[X]) - 
-                            self.d.gradient(vector_field[X],
-                                gradient_dir        = Y,
-                                L                   = self.L[Y],
-                                boundary_condition  = self.bcs[Y])])
+            # 2D curl still uses separate calls (could be optimized similarly)
+            return self.d.gradient(vector_field[1], 
+                                 gradient_dir=0,
+                                 L=self.L[0],
+                                 boundary_condition=self.bcs[0]) - \
+                   self.d.gradient(vector_field[0],
+                                 gradient_dir=1, 
+                                 L=self.L[1],
+                                 boundary_condition=self.bcs[1])
+        elif self.num_of_dims == 3:
+            # Use the optimized fused kernel
+            return self.d.vector_curl_fast(vector_field, self.L, self.bcs[0])
     
-
-    def vector_divergence(self,
-                          vector_field : np.ndarray) -> np.ndarray:
+    def vector_divergence(self, vector_field: np.ndarray) -> np.ndarray:
         """
-        Compute the vector divergence (assumes periodic boundary conditions).
-        
-        Author: James Beattie
-        
-        Args:
-            vector_field (np.ndarray)   : 3,N,N,N array of vector field,
-                                            where 3 is the vector component and N is the number of grid
-                                            points in each direction
-            
-        Returns:
-            divergence vector field (np.ndarray) : 1,N,N,N array of divergence of the vector field
-        
+        Optimized divergence computation using fused kernel
         """
-        
-        return np.sum(
-            np.array([self.d.gradient(vector_field[coord],
-                                gradient_dir       = coord,
-                                L                  = self.L[coord],
-                                boundary_condition = self.bcs[coord]) for coord in self.coords]),
-            axis=0)
+        if self.num_of_dims == 3:
+            # Use the optimized fused kernel
+            return self.d.vector_divergence_fast(vector_field, self.L, self.bcs[0])
+        else:
+            # Fallback for 1D/2D
+            return np.sum(
+                np.array([self.d.gradient(vector_field[coord],
+                                        gradient_dir=coord,
+                                        L=self.L[coord],
+                                        boundary_condition=self.bcs[coord]) 
+                         for coord in range(self.num_of_dims)]),
+                axis=0)
     
     
     def heating_rate(self,
@@ -860,7 +723,7 @@ class DerivedVars(ScalarOperations,
     def scalar_gradient(self,
                         scalar_field : np.ndarray) -> np.ndarray:
         """
-        Compute the gradient of a scalar field, grad(\phi). 
+        Compute the gradient of a scalar field, grad(phi). 
         
         Author: Neco Kriel & James Beattie
         
