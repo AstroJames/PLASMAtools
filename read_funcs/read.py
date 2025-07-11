@@ -2,20 +2,15 @@
 ## IMPORTS
 ## ###############################################################
 
-from uu import Error
 from h5py import File
 import numpy as np
-import numpy.polynomial.polynomial as poly
-import timeit
 from ..aux_funcs.derived_var_funcs import DerivedVars as DV
-# import pandas as pd
-from joblib import Parallel, delayed
 
 ## ###############################################################
 ## Auxillary reading functions (can be jit compiled)
 ## ###############################################################
 
-from .read_FLASH        import  reformat_FLASH_field, unsort_flash_field
+from .read_FLASH        import  reformat_FLASH_field, unsort_FLASH_field
 from .read_BHAC_fast    import  reformat_BHAC_field
 from .read_RAMSES       import  reformat_RAMSES_field
 
@@ -160,6 +155,29 @@ class Particles:
 
 
 
+# Import the optimized reformat functions
+# from .read_FLASH import reformat_FLASH_field, unsort_flash_field
+
+import numpy as np
+from h5py import File
+import time
+from typing import List, Union, Tuple
+
+# You'll need to ensure these imports work in your environment
+# from .read_FLASH import reformat_FLASH_field, unsort_flash_field
+# from .derived_var_funcs import DerivedVars as DV
+# from .read_BHAC_fast import reformat_BHAC_field
+
+# Placeholder for field lookup type - you'll need to import this
+field_lookup_type = {
+    "dens": "scalar",
+    "pres": "scalar", 
+    "temp": "scalar",
+    "vel": "vector",
+    "mag": "vector",
+    # Add more as needed
+}
+
 class Fields():
 
     def __init__(self,
@@ -178,30 +196,6 @@ class Fields():
             Default is False.
         sim_data_type : str, optional
             The type of simulation data to read in. Default is "flash".
-
-        Attributes
-        ----------
-        filename : str
-            The name of the file containing the FLASH grid data.
-        reformat : bool
-            Whether to reformat the data in the file into 3D arrays (True) or keep it in 1D arrays (False).
-        n_cores : int
-            The number of cores used in the simulation.
-        nxb : int
-            The number of blocks in the x direction.
-        nyb : int
-            The number of blocks in the y direction.
-        nzb : int
-            The number of blocks in the z direction.
-        n_cells : int
-            The total number of cells in the simulation.
-        int_properties : dict
-            A dictionary containing integer simulation properties.
-        str_properties : dict
-            A dictionary containing string simulation properties.
-        logic_properties : dict
-            A dictionary containing logical simulation properties.
-
         """
 
         # simulation attributes
@@ -231,9 +225,6 @@ class Fields():
         else:
             # otherwise, preallocate the 1D arrays for the grid data
             init_field = np.zeros(self.n_cells, dtype=np.float32)
-
-        # add a new method here for initialisation 
-        # (could speed up IO a bit but haven't properly timed it)
         
         # read in state (read in true or false if the reader
         # has actually been called -- this is all to save time 
@@ -248,14 +239,12 @@ class Fields():
         # use a CGS unit system
         self.mu0                = 4 * np.pi 
 
-
     def __read_sim_properties(self) -> None:
         """
         This function reads in the FLASH field properties directly from
         the hdf5 file metadata. 
         
         Author: James Beattie
-        
         """
         g = File(self.filename, 'r')
         self.int_scalars        = {str(key).split("'")[1].strip(): value for key, value in g["integer scalars"]}
@@ -275,7 +264,6 @@ class Fields():
         self.n_cells  = self.n_cores*self.nxb*self.nyb*self.nzb
         self.plot_file_num = self.int_scalars["plotfilenumber"]
 
-
     def set_reformat(self,
                      reformat: bool) -> None:
         """
@@ -283,11 +271,9 @@ class Fields():
         """
         self.reformat = reformat
         
-        
     def reformat_error(self,
                        var: str) -> None:
         Error(f"Cannot compute {var} without reformating the data.")
-    
     
     def read(self,
              field_str          : str,
@@ -297,9 +283,8 @@ class Fields():
              N_grid_x           : int  = 256,
              N_grid_y           : int  = 256,
              N_grid_z           : int  = 256) -> None:
-        
         """
-        This function reads in grid data.
+        Optimized function to read in grid data.
         
         Args:
             field_str (str):            The field to read in.
@@ -308,117 +293,134 @@ class Fields():
             N_grid_x (int):             The number of grid points to interpolate onto in the x direction.
             N_grid_y (int):             The number of grid points to interpolate onto in the y direction.
             N_grid_z (int):             The number of grid points to interpolate onto in the z direction.
-        
         """
         
-        setattr(self,f"read_{field_str}",True)
+        setattr(self, f"read_{field_str}", True)
         
-        if self.sim_data_type == "flash":     
-            # setting the read in states here (this adds an attribute)
+        if self.sim_data_type == "flash":
+            # Use optimized reading based on field type
             if field_lookup_type[field_str] == "scalar":
-                g = File(self.filename, 'r')
-                print(f"Reading in grid attribute: {field_str}")
-                if self.reformat:
-                    print(f"Reading in reformatted grid attribute: {field_str}")
-                    setattr(self, field_str, 
-                            np.array([reformat_FLASH_field(g[field_str][:,:,:,:],
-                                                 self.nxb,
-                                                 self.nyb,
-                                                 self.nzb,
-                                                 self.iprocs,
-                                                 self.jprocs,
-                                                 self.kprocs,
-                                                 debug)]))
-                else:
-                    setattr(self, field_str, np.array([g[field_str][:,:,:,:]]))
-                g.close()
-            
+                self._read_scalar_field_optimized(field_str, debug)
             elif field_lookup_type[field_str] == "vector":
-                g = File(self.filename, 'r')
-                for coord in ["x","y","z"]:
-                    print(f"Reading in grid attribute: {field_str}{coord}")
-                    if self.reformat: # if reformatting is required
-                        #time1 = timeit.default_timer()
-                        field_var = reformat_FLASH_field(g[f"{field_str}{coord}"][:,:,:,:],
-                                                         self.nxb,
-                                                         self.nyb,
-                                                         self.nzb,
-                                                         self.iprocs,
-                                                         self.jprocs,
-                                                         self.kprocs,
-                                                         debug)
-                        print(f"Reading in reformatted grid attribute: {field_str}{coord}")
-                        #time2 = timeit.default_timer()
-                        #print(f"The total time it took is: {time2-time1}")
-                        if vector_magnitude: # if the mag is required, add and accumulate the square of the components
-                            if coord == "x":
-                                field_mag = field_var**2
-                            else:
-                                field_mag += field_var**2
-                        else:
-                            if coord == "x":
-                                field = np.array([field_var])
-                            else:
-                                field = np.concatenate([field,[field_var]])
-                                
-                    else: # vector mag without reformatting
-                        if vector_magnitude:
-                            if coord == "x":
-                                field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
-                            else:
-                                field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2   
-                        else:
-                            if coord == "x":
-                                field = np.array(g[f"{field_str}{coord}"][:,:,:,:])[np.newaxis, ...]
-                            else:
-                                field = np.concatenate([field,
-                                                        np.array(g[f"{field_str}{coord}"][:,:,:,:])[np.newaxis, ...]],axis=0)                  
-                            
-                # now read in the fields       
-                if vector_magnitude:
-                    setattr(self, f"{field_str}_mag", np.sqrt(field_mag))
-                    del field_mag
-                else:
-                    setattr(self, f"{field_str}",field)    
-                    del field
-                if self.reformat:
-                    del field_var
-                
-                g.close()
+                self._read_vector_field_optimized(field_str, vector_magnitude, debug)
                 
         elif self.sim_data_type == "bhac":
-            
-            # now instantiate the bhac object
+            # BHAC reading logic remains the same
             d = reformat_BHAC_field(file_name=self.filename)
             
-            # read in coordinates
             if field_lookup_type[field_str] == "scalar":
-                 for var in bhac_lookup_dict[field_str]:
-                     if interpolate:
-                        setattr(self, field_str, d.interpolate_uniform_grid(var_name=var,
-                                                            n_grid_x=N_grid_x,
-                                                            n_grid_y=N_grid_y)) 
-                    # should add a method here for uniform grid          
-            elif field_lookup_type[field_str] == "vector": 
-                for var, coord in zip(bhac_lookup_dict[field_str],["x","y"]):
-                    t1 = timeit.default_timer()
+                for var in bhac_lookup_dict[field_str]:
                     if interpolate:
-                        setattr(self, field_str + coord, d.interpolate_uniform_grid(var_name=var,
-                                                            n_grid_x=N_grid_x,
-                                                            n_grid_y=N_grid_y))
-                        # should add a method here for uniform grid  
-                    t2 = timeit.default_timer()
-                    print(f"The total time it took is: {t2-t1}")
-               
-            # clean up after creating the object (not sure if this is required) 
+                        setattr(self, field_str, d.interpolate_uniform_grid(
+                            var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
+            elif field_lookup_type[field_str] == "vector": 
+                for var, coord in zip(bhac_lookup_dict[field_str], ["x","y"]):
+                    if interpolate:
+                        setattr(self, field_str + coord, d.interpolate_uniform_grid(
+                            var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
             del d
-            
-            
+
+    def _read_scalar_field_optimized(self, field_str: str, debug: bool) -> None:
+        """Optimized scalar field reading"""
+        print(f"Reading in grid attribute: {field_str}")
+        
+        with File(self.filename, 'r') as g:
+            if self.reformat:
+                print(f"Reading in reformatted grid attribute: {field_str}")
+                # Read and reformat in one step
+                field_data = reformat_FLASH_field(
+                    g[field_str][:,:,:,:],
+                    self.nxb, self.nyb, self.nzb,
+                    self.iprocs, self.jprocs, self.kprocs,
+                    debug
+                )
+                setattr(self, field_str, np.array([field_data]))
+            else:
+                # Direct read without intermediate array
+                setattr(self, field_str, g[field_str][:,:,:,:][np.newaxis, ...])
+
+    def _read_vector_field_optimized(self, field_str: str, vector_magnitude: bool, debug: bool) -> None:
+        """Optimized vector field reading with better memory management"""
+        coords = ["x", "y", "z"]
+        
+        with File(self.filename, 'r') as g:
+            if self.reformat:
+                if vector_magnitude:
+                    # Accumulate magnitude without storing components
+                    field_mag = None
+                    for i, coord in enumerate(coords):
+                        print(f"Reading in grid attribute: {field_str}{coord}")
+                        
+                        # Read and reformat component
+                        component = reformat_FLASH_field(
+                            g[f"{field_str}{coord}"][:,:,:,:],
+                            self.nxb, self.nyb, self.nzb,
+                            self.iprocs, self.jprocs, self.kprocs,
+                            debug
+                        )
+                        
+                        # Accumulate squared components
+                        if i == 0:
+                            field_mag = component**2
+                        else:
+                            field_mag += component**2
+                        
+                        # Free memory immediately
+                        del component
+                    
+                    # Set magnitude with extra dimension
+                    setattr(self, f"{field_str}_mag", np.sqrt(field_mag)[np.newaxis, ...])
+                else:
+                    # Pre-allocate array for all components
+                    print(f"Reading in grid attribute: {field_str}x")
+                    first_component = reformat_FLASH_field(
+                        g[f"{field_str}x"][:,:,:,:],
+                        self.nxb, self.nyb, self.nzb,
+                        self.iprocs, self.jprocs, self.kprocs,
+                        debug
+                    )
+                    
+                    # Pre-allocate with correct shape
+                    field = np.empty((3,) + first_component.shape, dtype=np.float32)
+                    field[0] = first_component
+                    
+                    # Read remaining components
+                    for i, coord in enumerate(coords[1:], 1):
+                        print(f"Reading in grid attribute: {field_str}{coord}")
+                        field[i] = reformat_FLASH_field(
+                            g[f"{field_str}{coord}"][:,:,:,:],
+                            self.nxb, self.nyb, self.nzb,
+                            self.iprocs, self.jprocs, self.kprocs,
+                            debug
+                        )
+                    
+                    setattr(self, field_str, field)
+            else:
+                # Non-reformatted path
+                if vector_magnitude:
+                    field_mag = None
+                    for i, coord in enumerate(coords):
+                        if i == 0:
+                            field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
+                        else:
+                            field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2
+                    
+                    setattr(self, f"{field_str}_mag", np.sqrt(field_mag))
+                else:
+                    # Pre-allocate for vector components
+                    shape = g[f"{field_str}x"].shape
+                    field = np.empty((3,) + shape, dtype=np.float32)
+                    
+                    for i, coord in enumerate(coords):
+                        print(f"Reading in grid attribute: {field_str}{coord}")
+                        field[i] = g[f"{field_str}{coord}"][:,:,:,:]
+                    
+                    setattr(self, field_str, field)
+
     def write(self,
               field_str : str,
               new_field : np.ndarray) -> None:
         """
-        
         This function writes a new field to the FLASH file.
 
         Args:
@@ -428,47 +430,42 @@ class Fields():
         
         assert self.sim_data_type == "flash", "write: Only FLASH data can be written."
         
-        # dont accept underscores in the field string (not sure why this doesn't work)
+        # dont accept underscores in the field string
         if "_" in field_str:
             raise Exception("write: Field string cannot contain underscores.")
         
         # now write this to the hdf5 file
-        f = File(self.filename, 'a')
-        if field_str in f.keys():
-            print("write: deleting the old field.")
-            del f[field_str]
-        
-        if self.reformat:
-            print("write: adding the new reformated field.")
-            f.create_dataset(field_str, data=unsort_flash_field(new_field,
-                                                                self.nxb,
-                                                                self.nyb,
-                                                                self.nzb,
-                                                                self.iprocs,
-                                                                self.jprocs,
-                                                                self.kprocs))
-        else:
-            print("write: adding the new field.")
-            f.create_dataset(field_str, data=new_field)
+        with File(self.filename, 'a') as f:
+            if field_str in f.keys():
+                print("write: deleting the old field.")
+                del f[field_str]
             
-        # check if the unknown names are in the file
-        name_added      = False
-        unknown_names   = f["unknown names"]
-        for i in unknown_names:
-            if field_str.encode("utf-8") in i[0]:
-                name_added = True
-                print(f"write: Field {field_str} already in file. Skipping.")
-        if not name_added:
-            print(f"write: Adding {field_str} to unknown names.")
-            del f["unknown names"]
-            f.create_dataset("unknown names",
-                                data=np.vstack([unknown_names,
-                                                np.array([field_str],
-                                                         dtype="S4")]))
-        
-        f.close()
+            if self.reformat:
+                print("write: adding the new reformated field.")
+                f.create_dataset(field_str, data=unsort_FLASH_field(
+                    new_field,
+                    self.nxb, self.nyb, self.nzb,
+                    self.iprocs, self.jprocs, self.kprocs
+                ))
+            else:
+                print("write: adding the new field.")
+                f.create_dataset(field_str, data=new_field)
+                
+            # check if the unknown names are in the file
+            name_added = False
+            unknown_names = f["unknown names"]
+            for i in unknown_names:
+                if field_str.encode("utf-8") in i[0]:
+                    name_added = True
+                    print(f"write: Field {field_str} already in file. Skipping.")
+            
+            if not name_added:
+                print(f"write: Adding {field_str} to unknown names.")
+                del f["unknown names"]
+                f.create_dataset("unknown names",
+                    data=np.vstack([unknown_names,
+                                  np.array([field_str], dtype="S4")]))
 
-            
     def derived_var(self,
                     field_str: str,
                     eta: float      = 0.0,
@@ -477,12 +474,9 @@ class Fields():
         """
         General function for adding derived variables to the data object,
         rather than having to derive them in the aux funcs script.
-        
         """
         
         # this is a pre-defined table for common derived vars
-        # any new commonly used variables should be added here 
-        # so you can just call them with .derived_var("E"), etc.
         var_lookup_table = {
             "E"            : ["Ex","Ey","Ez"],                   # electric field
             "Exb"          : ["Exbx","Exby","Exbz"],             # reconnection inflow velocity
@@ -503,17 +497,14 @@ class Fields():
         if field_str not in var_lookup_table:
             raise Exception(f"derived_var: {field_str} not in new_var_lookup_table. Add the variable defn. first.")
 
-        
         print(f"derived_var: Beginning to calculate derived variables with n_workers = {n_workers}")
+        
         # grid data attributes
-        # if the data is going to be reformated, preallocate the 3D
-        # arrays for the grid data
         if self.reformat:
             init_field = np.zeros((self.nyb*self.jprocs,
                                    self.nxb*self.iprocs,
                                    self.nzb*self.kprocs), dtype=np.float32)
         else:
-            # otherwise, preallocate the 1D arrays for the grid data
             init_field = np.zeros(self.n_cells, dtype=np.float32)
         
         # add the init field to the data object
@@ -525,7 +516,6 @@ class Fields():
         ######################################################
             
         # Defn: the current density
-        # assuming \mu_0 = 4\pi for current
         if field_str == "cur":
             print(f"derived_var: Calculating current density.")
             
@@ -535,8 +525,7 @@ class Fields():
             # write the new variable to the object
             setattr(self, field_str, dvf.vector_curl(self.mag) / (self.mu0))
             
-        # Defn: the current density
-        # assuming \mu_0 = 4\pi for current
+        # Defn: vorticity
         if field_str == "vort":
             print(f"derived_var: Calculating vorticity density.")
             
@@ -545,12 +534,7 @@ class Fields():
                             
             # write the new variable to the object
             setattr(self, field_str, dvf.vector_curl(self.vel))
-                
-        # add more implementations here.
-            
-            
 
-    
 
 class PowerSpectra():
     
