@@ -72,6 +72,24 @@ sig_filter_32 = types.UniTuple(types.float32[:,:,:], 2)(
 ## ###############################################################
 ## Numba Core Spectral Functions
 ## ###############################################################
+@njit(sig_rad_dist_2D, parallel=True, fastmath=True, cache=True)
+def compute_radial_distances_2D(shape : tuple) -> np.ndarray:
+    """
+    Parallel computation of radial distances from center
+    """
+    ny, nx = shape
+    center_y = (ny - 1) / 2.0
+    center_x = (nx - 1) / 2.0
+    
+    r = np.empty(shape, dtype=np.float32)
+    
+    for y in prange(ny):
+        for x in range(nx):
+            dy = y - center_y
+            dx = x - center_x
+            r[y, x] = np.sqrt(dy*dy + dx*dx)
+    return r
+
 
 @njit(sig_rad_dist_3D, parallel=True, fastmath=True, cache=True)
 def compute_radial_distances_3D(shape : tuple) -> np.ndarray:
@@ -93,80 +111,6 @@ def compute_radial_distances_3D(shape : tuple) -> np.ndarray:
                 dx = x - center_x
                 r[z, y, x] = np.sqrt(dz*dz + dy*dy + dx*dx)
     return r
-
-
-@njit(sig_rad_dist_2D, parallel=True, fastmath=True, cache=True)
-def compute_radial_distances_2D(shape : tuple) -> np.ndarray:
-    """
-    Parallel computation of radial distances from center
-    """
-    ny, nx = shape
-    center_y = (ny - 1) / 2.0
-    center_x = (nx - 1) / 2.0
-    
-    r = np.empty(shape, dtype=np.float32)
-    
-    for y in prange(ny):
-        for x in range(nx):
-            dy = y - center_y
-            dx = x - center_x
-            r[y, x] = np.sqrt(dy*dy + dx*dx)
-    return r
-
-
-@njit([sig_sph_int_32, sig_sph_int_64], parallel=True, fastmath=True, cache=True)
-def spherical_integrate_core_3D(data : np.ndarray, 
-                                r : np.ndarray,
-                                bin_edges : np.ndarray,
-                                bins : int) -> np.ndarray:
-    """
-    Fully parallel version using thread-local accumulation
-    """
-    data_flat = data.ravel()
-    r_flat = r.ravel()
-    n_elements = len(data_flat)
-    n_edges = len(bin_edges)
-    
-    # Get number of threads
-    n_threads = numba.config.NUMBA_NUM_THREADS
-    
-    # Create thread-local accumulators with matching dtype
-    local_sums = np.zeros((n_threads, bins), dtype=data.dtype)
-    
-    # Parallel binning and accumulation
-    for i in prange(n_elements):
-        r_val = r_flat[i]
-        
-        # Compute bin index
-        if r_val < bin_edges[0]:
-            bin_idx = 0
-        elif r_val >= bin_edges[-1]:
-            bin_idx = n_edges
-        else:
-            left = 0
-            right = n_edges - 1
-            
-            while left < right:
-                mid = (left + right) // 2
-                if r_val < bin_edges[mid]:
-                    right = mid
-                else:
-                    left = mid + 1
-            
-            bin_idx = left
-        
-        # Accumulate into thread-local array
-        if 1 <= bin_idx <= bins:
-            thread_id = numba.get_thread_id()
-            local_sums[thread_id, bin_idx - 1] += data_flat[i]
-    
-    # Merge thread-local results with matching dtype
-    radial_sum = np.zeros(bins, dtype=data.dtype)
-    for i in range(bins):
-        for t in range(n_threads):
-            radial_sum[i] += local_sums[t, i]
-    
-    return radial_sum
 
 
 @njit([sig_sph_int_2d_32, sig_sph_int_2d_64], parallel=True, fastmath=True, cache=True)
@@ -224,32 +168,62 @@ def spherical_integrate_core_2D(data: np.ndarray,
     return radial_sum
 
 
+@njit([sig_sph_int_32, sig_sph_int_64], parallel=True, fastmath=True, cache=True)
+def spherical_integrate_core_3D(data : np.ndarray, 
+                                r : np.ndarray,
+                                bin_edges : np.ndarray,
+                                bins : int) -> np.ndarray:
+    """
+    Fully parallel version using thread-local accumulation
+    """
+    data_flat = data.ravel()
+    r_flat = r.ravel()
+    n_elements = len(data_flat)
+    n_edges = len(bin_edges)
+    
+    # Get number of threads
+    n_threads = numba.config.NUMBA_NUM_THREADS
+    
+    # Create thread-local accumulators with matching dtype
+    local_sums = np.zeros((n_threads, bins), dtype=data.dtype)
+    
+    # Parallel binning and accumulation
+    for i in prange(n_elements):
+        r_val = r_flat[i]
+        
+        # Compute bin index
+        if r_val < bin_edges[0]:
+            bin_idx = 0
+        elif r_val >= bin_edges[-1]:
+            bin_idx = n_edges
+        else:
+            left = 0
+            right = n_edges - 1
+            
+            while left < right:
+                mid = (left + right) // 2
+                if r_val < bin_edges[mid]:
+                    right = mid
+                else:
+                    left = mid + 1
+            
+            bin_idx = left
+        
+        # Accumulate into thread-local array
+        if 1 <= bin_idx <= bins:
+            thread_id = numba.get_thread_id()
+            local_sums[thread_id, bin_idx - 1] += data_flat[i]
+    
+    # Merge thread-local results with matching dtype
+    radial_sum = np.zeros(bins, dtype=data.dtype)
+    for i in range(bins):
+        for t in range(n_threads):
+            radial_sum[i] += local_sums[t, i]
+    
+    return radial_sum
+
+
 @njit(parallel=True, fastmath=True, cache=True)
-def compute_cylindrical_distances(shape: tuple) -> tuple:
-    """
-    Compute cylindrical distances (k_perp and k_para) in parallel.
-    """
-    nz, ny, nx = shape
-    center_z = (nz - 1) / 2.0
-    center_y = (ny - 1) / 2.0
-    center_x = (nx - 1) / 2.0
-    
-    k_perp = np.empty(shape, dtype=np.float64)
-    k_para = np.empty(shape, dtype=np.float64)
-    
-    for z in prange(nz):
-        dz = z - center_z
-        for y in range(ny):
-            dy = y - center_y
-            for x in range(nx):
-                dx = x - center_x
-                k_perp[z, y, x] = np.sqrt(dx*dx + dy*dy)
-                k_para[z, y, x] = np.abs(dz)
-    
-    return k_perp, k_para
-
-
-@njit(parallel=True, fastmath=True)
 def compute_cylindrical_distances(shape: tuple) -> tuple:
     """
     Compute cylindrical distances (k_perp and k_para) in parallel.
@@ -346,23 +320,17 @@ def cylindrical_integrate_core(data: np.ndarray,
     return cylindrical_sum
 
 
-@njit(sig_filter_32, parallel=True, fastmath=True, cache=True, boundscheck=False, nogil=True, inline='always')
+@njit(sig_filter_32, parallel=True, fastmath=True, cache=True, 
+      boundscheck=False, nogil=True, inline='always')
 def apply_shell_filter_3d_vectorized(data_real: np.ndarray,
-                                data_imag: np.ndarray,
-                                k_mag: np.ndarray,
-                                k_min: float,
-                                k_max: float,
-                                filter_type: int,
-                                sigma: float) -> tuple:
+                                     data_imag: np.ndarray,
+                                     k_mag: np.ndarray,
+                                     k_min: float,
+                                     k_max: float,
+                                     filter_type: int,
+                                     sigma: float) -> tuple:
     """
-    Ultra-optimized shell filter with maximum performance focus.
-    
-    Optimizations:
-    - Minimal branching
-    - Optimal memory access patterns  
-    - Pre-computed constants
-    - Aggressive compiler hints
-    - Cache-friendly loop ordering
+    Apply shell filter in Fourier space using vectorized operations.
     """
     nz, ny, nx = data_real.shape
     out_real = np.empty_like(data_real)  # Use empty instead of zeros
@@ -396,47 +364,6 @@ def apply_shell_filter_3d_vectorized(data_real: np.ndarray,
                     out_imag[z, y, x] = data_imag[z, y, x] * weight
     
     return out_real, out_imag
-
-# @njit([filter_sig_32, filter_sig_64], parallel=True, fastmath=True, cache=True, boundscheck=False)
-# def apply_shell_filter_3d_vectorized(data_real: np.ndarray,
-#                                      data_imag: np.ndarray,
-#                                      k_mag: np.ndarray,
-#                                      k_min: float,
-#                                      k_max: float,
-#                                      filter_type: int,
-#                                      sigma: float) -> tuple:
-#     """
-#     Vectorized shell filter optimized for better cache usage.
-#     Processes y-x planes in parallel for better memory locality.
-#     """
-#     nz, ny, nx = data_real.shape
-#     out_real = np.empty_like(data_real)
-#     out_imag = np.empty_like(data_imag)
-    
-#     if filter_type == 0:  # tophat filter
-#         for z in prange(nz):
-#             for y in range(ny):
-#                 # Inner loop optimization - better for vectorization
-#                 for x in range(nx):
-#                     k = k_mag[z, y, x]
-#                     # Branchless version using multiplication
-#                     mask = (k > k_min) & (k <= k_max)
-#                     out_real[z, y, x] = data_real[z, y, x] * mask
-#                     out_imag[z, y, x] = data_imag[z, y, x] * mask
-#     else:  # gaussian filter
-#         k0 = (k_min + k_max) * 0.5
-#         norm = 1.0 / (2.0 * sigma * sigma)
-        
-#         for z in prange(nz):
-#             for y in range(ny):
-#                 for x in range(nx):
-#                     k = k_mag[z, y, x]
-#                     k_diff = k - k0
-#                     weight = np.exp(-k_diff * k_diff * norm)
-#                     out_real[z, y, x] = data_real[z, y, x] * weight
-#                     out_imag[z, y, x] = data_imag[z, y, x] * weight
-    
-#     return out_real, out_imag
 
 
 @njit(fastmath=True)
@@ -475,6 +402,7 @@ def compute_k_magnitude_3d(kx: np.ndarray, ky: np.ndarray, kz: np.ndarray) -> np
                                         kz[z, y, x]**2)
     return k_mag
 
+
 @njit(parallel=True, fastmath=True)
 def compute_k_magnitude_2d(kx: np.ndarray, ky: np.ndarray) -> np.ndarray:
     """
@@ -502,6 +430,7 @@ class FFTWPlanCache:
         self.plans = {}
         self.max_plans = max_plans
         self.enabled = pyfftw_import
+        
         
     def get_fft_plan(self, 
                      shape, 
@@ -551,6 +480,7 @@ class FFTWPlanCache:
         
         self.plans[key] = plan
         return plan
+  
     
     def execute_fft(self, 
                     data, 
@@ -664,6 +594,40 @@ class SpectraOperations:
                                  norm=norm)
     
     
+    def compute_power_spectrum_2D(self, 
+                                  field: np.ndarray) -> np.ndarray:
+        """
+        Computes 2D power spectrum using cached FFT plans.
+        """
+        assert len(field.shape) == 3, "Field should be 2D"
+        
+        # Ensure data is float32 for memory efficiency
+        if field.dtype != np.float32:
+            print(f"Converting {field.dtype} data to float32 for memory efficiency")
+            field = field.astype(np.float32)
+
+        field_fft = self._do_fft(field, axes=(1, 2), 
+                                 forward=True,
+                                 real=np.isrealobj(field),
+                                 norm='forward')
+        
+        out = np.sum(np.abs(field_fft)**2, 
+                     axis=0)
+        
+        # Handle real FFT
+        if np.isrealobj(field) and field_fft.shape[-1] != field.shape[-1]:
+            N = field.shape
+            full_out = np.zeros((N[1], N[2]), dtype=out.dtype)
+            full_out[:, :out.shape[-1]] = out
+            if N[2] % 2 == 0:
+                full_out[:, -N[2]//2+1:] = out[:, 1:N[2]//2][:, ::-1]
+            else:
+                full_out[:, -N[2]//2:] = out[:, 1:N[2]//2+1][:, ::-1]
+            out = full_out
+        
+        return fftshift(out, axes=(0, 1))
+
+
     def compute_power_spectrum_3D(self, 
                                   field: np.ndarray) -> np.ndarray:
         """
@@ -701,40 +665,6 @@ class SpectraOperations:
         
         return fftshift(out, axes=(0, 1, 2))
     
-
-    def compute_power_spectrum_2D(self, 
-                                  field: np.ndarray) -> np.ndarray:
-        """
-        Computes 2D power spectrum using cached FFT plans.
-        """
-        assert len(field.shape) == 3, "Field should be 2D"
-        
-        # Ensure data is float32 for memory efficiency
-        if field.dtype != np.float32:
-            print(f"Converting {field.dtype} data to float32 for memory efficiency")
-            field = field.astype(np.float32)
-
-        field_fft = self._do_fft(field, axes=(1, 2), 
-                                 forward=True,
-                                 real=np.isrealobj(field),
-                                 norm='forward')
-        
-        out = np.sum(np.abs(field_fft)**2, 
-                     axis=0)
-        
-        # Handle real FFT
-        if np.isrealobj(field) and field_fft.shape[-1] != field.shape[-1]:
-            N = field.shape
-            full_out = np.zeros((N[1], N[2]), dtype=out.dtype)
-            full_out[:, :out.shape[-1]] = out
-            if N[2] % 2 == 0:
-                full_out[:, -N[2]//2+1:] = out[:, 1:N[2]//2][:, ::-1]
-            else:
-                full_out[:, -N[2]//2:] = out[:, 1:N[2]//2+1][:, ::-1]
-            out = full_out
-        
-        return fftshift(out, axes=(0, 1))
-
 
     def compute_tensor_power_spectrum(self, 
                                       field: np.ndarray) -> np.ndarray:
@@ -797,6 +727,7 @@ class SpectraOperations:
     
         return k_modes, radial_sum
 
+
     def spherical_integrate_3D(self, 
                                data: np.ndarray, 
                                bins: int = None) -> tuple:
@@ -821,81 +752,6 @@ class SpectraOperations:
         k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
         
         return k_modes, radial_sum
-
-
-    def spherical_integrate_2D(self,
-                               data: np.ndarray, 
-                               bins: int = None) -> tuple:
-        """
-        The spherical integrate function takes the 2D power spectrum and integrates
-        over spherical shells of constant k. The result is a 1D power spectrum.
-        
-        Needs to be tested in detail
-        
-        Args:
-            data: The 2D power spectrum
-            bins: The number of bins to use for the radial integration. 
-                If not specified, the Nyquist limit is used (as should always be the case, anyway).
-
-        Returns:
-            k_modes: The k modes corresponding to the radial integration
-            radial_sum: The radial integration of the 3D power spectrum (including k^2 correction)
-        """
-        y, x = np.indices(data.shape)
-        center = np.array([(i - 1) / 2.0 for i in data.shape])
-        r = np.sqrt((x - center[0])**2 + (y - center[1])**2)
-
-        N = data.shape[0]
-        if not bins:
-            bins = N // 2
-
-        bin_edges = np.linspace(0.5, bins, bins+1)
-
-        # Use np.digitize to assign each element to a bin
-        bin_indices = np.digitize(r, bin_edges)
-
-        # Compute the radial profile
-        radial_sum = np.zeros(bins)
-        for i in range(1, bins+1):
-            mask = bin_indices == i
-            radial_sum[i-1] = np.sum(data[mask])
-
-        # Generate the spatial frequencies with dk=1
-        # Now k_modes represent the bin centers
-        k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
-
-        return k_modes, radial_sum
-
-    def cylindrical_integrate(self, 
-                              data: np.ndarray, 
-                              bins_perp: int = 0,
-                              bins_para: int = 0) -> tuple:
-        """
-        Cylindrical integration using JIT-compiled functions.
-        """
-        N = data.shape[0]
-        if bins_perp == 0:
-            bins_perp = N // 2
-        if bins_para == 0:
-            bins_para = N // 2
-        
-        # Use JIT function for distances
-        k_perp, k_para = compute_cylindrical_distances(data.shape)
-        
-        bin_edges_perp = np.linspace(0, bins_perp, bins_perp + 1)
-        bin_edges_para = np.linspace(0, bins_para, bins_para + 1)
-        
-        # Use JIT function for integration
-        cylindrical_sum = cylindrical_integrate_core(
-            data, k_perp, k_para,
-            bin_edges_perp, bin_edges_para,
-            bins_perp, bins_para
-        )
-        
-        k_perp_modes = (bin_edges_perp[:-1] + bin_edges_perp[1:]) / 2
-        k_para_modes = (bin_edges_para[:-1] + bin_edges_para[1:]) / 2
-        
-        return k_perp_modes, k_para_modes, cylindrical_sum
 
 
     def cylindrical_integrate(self, 
@@ -966,7 +822,7 @@ class SpectraOperations:
             real_part = np.real(vector_field_fft[comp]).astype(np.float32)
             imag_part = np.imag(vector_field_fft[comp]).astype(np.float32)
             
-            real_filtered, imag_filtered = self.apply_shell_filter_3d(
+            real_filtered, imag_filtered = apply_shell_filter_3d_vectorized(
                 real_part, imag_part, k_mag,
                 k_minus, k_plus, filter_type, sigma
             )
@@ -983,11 +839,11 @@ class SpectraOperations:
         return np.real(result)
     
     
-    @staticmethod
-    def extract_shell_X_2D(vector_field: np.ndarray,
-                          k_minus_dk: float,
-                          k_plus_dk: float,
-                          L: list = [1.0, 1.0]) -> np.ndarray:
+    def extract_2D_isotropic_X(self,
+                           vector_field: np.ndarray,
+                           k_minus_dk: float,
+                           k_plus_dk: float,
+                           L: list = [1.0, 1.0]) -> np.ndarray:
         """
         2D shell extraction (keeping original implementation for now).
         """
@@ -1008,112 +864,7 @@ class SpectraOperations:
         # Inverse transform
         return np.real(ifftn(vector_fft, axes=(1, 2), norm='forward'))
 
-
-    def apply_shell_filter_3d(self,
-                              data_real: np.ndarray,
-                              data_imag: np.ndarray,
-                              k_mag: np.ndarray,
-                              k_min: float,
-                              k_max: float,
-                              filter_type: int = 0,
-                              sigma: float = 1.0) -> tuple:
-        """
-        Automatically choose the best filtering method based on array size and parameters.
         
-        """
-        
-        return apply_shell_filter_3d_vectorized(
-            data_real, data_imag, k_mag, k_min, k_max, filter_type, sigma
-        )
-        
-
-    def extract_shell_X_2D(vector_field    : np.ndarray,
-                        k_minus_dk      : float,
-                        k_plus_dk       : float,
-                        L               : list = [1.0,1.0] ) -> np.ndarray:
-        """
-        Extract and return the inverse FFT of a specific shell of a vector field.
-
-        This method extracts the components of a vector field that fall within a 
-        specified wavenumber shell, defined by the range `k_minus_dk < k < k_plus_dk`. 
-        The shell is selected based on the direction specified in `self.direction` 
-        ('parallel', 'perp', or 'iso'), and the inverse FFT of the filtered shell 
-        is computed and returned.
-        
-        Author: James Beattie & Anne Noer Kolborg
-
-        Args:
-            vector_field (np.ndarray): The input vector field to be filtered and 
-                                    transformed. It is assumed to be a 3D field.
-            k_minus_dk (float): The lower bound of the wavenumber shell.
-            k_plus_dk (float): The upper bound of the wavenumber shell.
-
-        Returns:
-            np.ndarray: The inverse FFT of the filtered vector field, limited to 
-                        the specified wavenumber shell.
-
-        Raises:
-            Assertion error: If the input vector field is not 3D.
-            ValueError: If `self.direction` is not recognized. Valid options are: 
-                        'parallel', 'perp', 'iso'.
-
-        Workflow:
-            1. The method first determines the type of filter to apply based on 
-            `self.direction`. The filter type is either 'parallel', 'perp', 
-            or 'iso', corresponding to different wavenumber components.
-            2. It then creates a mask using the filter, selecting the wavenumbers 
-            that fall within the specified range (`k_minus_dk` to `k_plus_dk`).
-            3. The vector field is transformed into Fourier space using `fftn`.
-            4. The mask is applied to isolate the desired wavenumber components.
-            5. The inverse FFT (`ifftn`) of the masked field is computed and returned.
-
-        Example:
-            # Example usage to extract a shell and compute the inverse FFT:
-            filtered_field = self.extract_shell_X(vector_field, 0.5, 1.5)
-
-        Notes:
-            - The method assumes that `self.kx`, `self.ky`, and `self.kz` have been 
-            initialized and correspond to the wavenumbers of the grid.
-            - The extracted shell is in the form of a 3D numpy array, and the output 
-            is also a 3D numpy array representing the spatial domain.
-
-        References:
-            This method is based on the transfer function code by Philip Grete:
-            https://github.com/pgrete/energy-transfer-analysis
-        """
-        
-        #assert np.shape(vector_field)[0] == 2, "Error: Vector field must be 2D."
-        
-        N = vector_field.shape
-        kx = 2 * np.pi * fftfreq(N, d=L[0]/N[0]) / L[0]
-        ky = 2 * np.pi * fftfreq(N, d=L[1]/N[1]) / L[1]
-        
-        def filter(kmin, kmax, kx, ky, filter_type):
-            kx, ky = np.meshgrid(kx, ky, indexing='ij')
-            # Define filter types
-            filters = {
-                'twod': np.sqrt(kx**2 + ky**2),
-            }
-            # Calculate the filter
-            k_filter = filters[filter_type]
-            mask = np.logical_and(k_filter >= kmin, k_filter <= kmax)
-            return np.array([mask.astype(float), mask.astype(float)])
-
-        # Inverse FFT with just the wavenumbers from the shell 
-        return np.real(
-            ifftn(
-                filter(k_minus_dk, 
-                    k_plus_dk, 
-                    kx, 
-                    ky, 
-                    'twod') * fftn(
-                    vector_field,
-                    norm='forward',
-                    axes=(1, 2)),
-                axes=(1, 2),
-                norm="forward"))
-
-
 class GeneratedFields:
     """
     
@@ -1132,6 +883,7 @@ class GeneratedFields:
         It is not fully functional yet.
         """
         pass
+    
     
     @staticmethod
     def create_helical_field(N, 
@@ -1188,6 +940,7 @@ class GeneratedFields:
 
         return field
 
+
     @staticmethod
     def generate_isotropic_powerlaw_field(size:  int,
                                           alpha: float = 5./3.) -> np.ndarray:
@@ -1227,6 +980,7 @@ class GeneratedFields:
         adjusted_field = 10*random_field * amplitude
 
         return np.fft.ifftn(adjusted_field).real
+
 
     @staticmethod
     def generate_anisotropic_powerlaw_field(N:      int,
@@ -1283,6 +1037,7 @@ class GeneratedFields:
         F[:, :, N//2+1:] = np.conj(Fhalf[:, :, 1:N//2][..., ::-1])
 
         return np.fft.ifftn(F,norm="forward").real
+    
     
     @staticmethod
     def helical_decomposition(vector_field):
@@ -1376,6 +1131,51 @@ class GeneratedFields:
 
         return u_plus, u_minus
     
+        
+# Old functions to test against:
+        
+    # def spherical_integrate_2D(self,
+    #                        data: np.ndarray, 
+    #                        bins: int = None) -> tuple:
+    # """
+    # The spherical integrate function takes the 2D power spectrum and integrates
+    # over spherical shells of constant k. The result is a 1D power spectrum.
+
+    # Needs to be tested in detail
+
+    # Args:
+    #     data: The 2D power spectrum
+    #     bins: The number of bins to use for the radial integration. 
+    #         If not specified, the Nyquist limit is used (as should always be the case, anyway).
+
+    # Returns:
+    #     k_modes: The k modes corresponding to the radial integration
+    #     radial_sum: The radial integration of the 3D power spectrum (including k^2 correction)
+    # """
+    # y, x = np.indices(data.shape)
+    # center = np.array([(i - 1) / 2.0 for i in data.shape])
+    # r = np.sqrt((x - center[0])**2 + (y - center[1])**2)
+
+    # N = data.shape[0]
+    # if not bins:
+    #     bins = N // 2
+
+    # bin_edges = np.linspace(0.5, bins, bins+1)
+
+    # # Use np.digitize to assign each element to a bin
+    # bin_indices = np.digitize(r, bin_edges)
+
+    # # Compute the radial profile
+    # radial_sum = np.zeros(bins)
+    # for i in range(1, bins+1):
+    #     mask = bin_indices == i
+    #     radial_sum[i-1] = np.sum(data[mask])
+
+    # # Generate the spatial frequencies with dk=1
+    # # Now k_modes represent the bin centers
+    # k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:])/2)
+
+    # return k_modes, radial_sum
     
     # def cylindrical_integrate(self,
     #                           data: np.ndarray, 
