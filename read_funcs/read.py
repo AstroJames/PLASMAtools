@@ -214,17 +214,6 @@ class Fields():
         # read in the simulation properties
         if self.sim_data_type == "flash":
             self.__read_sim_properties()  
-
-        # grid data attributes
-        # if the data is going to be reformated, preallocate the 3D
-        # arrays for the grid data
-        if self.reformat:
-            init_field = np.zeros((self.nyb*self.int_properties["jprocs"],
-                                   self.nxb*self.int_properties["iprocs"],
-                                   self.nzb*self.int_properties["kprocs"]), dtype=np.float32)
-        else:
-            # otherwise, preallocate the 1D arrays for the grid data
-            init_field = np.zeros(self.n_cells, dtype=np.float32)
         
         # read in state (read in true or false if the reader
         # has actually been called -- this is all to save time 

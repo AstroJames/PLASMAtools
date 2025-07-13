@@ -13,18 +13,38 @@
 import numpy as np
 from numba import njit, prange, types
        
-# Define type signatures for Numba
-sig32_sort = types.float32[:,:,:](types.float32[:,:,:,:], types.int32, types.int32, types.int32, types.int32, types.int32, types.int32)
-sig32_usort = types.float32[:,:,:,:](types.float32[:,:,:], types.int32, types.int32, types.int32, types.int32, types.int32, types.int32)
+##############################################################################
+# Type signatures for Numba functions
+##############################################################################
+
+
+sig32_sort = types.float32[:,:,:](
+    types.float32[:,:,:,:], 
+    types.int32, 
+    types.int32, 
+    types.int32, 
+    types.int32, 
+    types.int32, 
+    types.int32
+    )
+sig32_usort = types.float32[:,:,:,:](
+    types.float32[:,:,:], 
+    types.int32, 
+    types.int32, 
+    types.int32, 
+    types.int32, 
+    types.int32, 
+    types.int32)
 
 @njit([sig32_sort], parallel=True, fastmath=True, nogil=True, cache=True)
-def sort_flash_field_opt(field    : np.ndarray,
-                               nxb      : int,
-                               nyb      : int,
-                               nzb      : int, 
-                               iprocs   : int,
-                               jprocs   : int,
-                               kprocs   : int) -> np.ndarray:
+def sort_flash_field_opt(
+    field    : np.ndarray,
+    nxb      : int,
+    nyb      : int,
+    nzb      : int, 
+    iprocs   : int,
+    jprocs   : int,
+    kprocs   : int) -> np.ndarray:
     """
     Optimized version with several performance improvements:
     1. Pre-calculate base indices
@@ -67,13 +87,14 @@ def sort_flash_field_opt(field    : np.ndarray,
 
 
 @njit([sig32_sort], parallel=True, fastmath=True, nogil=True, cache=True)
-def sort_flash_field_vec(field    : np.ndarray,
-                                nxb      : int,
-                                nyb      : int,
-                                nzb      : int, 
-                                iprocs   : int,
-                                jprocs   : int,
-                                kprocs   : int) -> np.ndarray:
+def sort_flash_field_vec(
+    field    : np.ndarray,
+    nxb      : int,
+    nyb      : int,
+    nzb      : int, 
+    iprocs   : int,
+    jprocs   : int,
+    kprocs   : int) -> np.ndarray:
     """
     Vectorized version that copies entire rows at once
     """
@@ -109,13 +130,14 @@ def sort_flash_field_vec(field    : np.ndarray,
 
 
 @njit([sig32_usort], parallel=True, fastmath=True, nogil=True)
-def unsort_FLASH_field(field_sorted : np.ndarray,
-                        nxb          : int,
-                        nyb          : int,
-                        nzb          : int,
-                        iprocs       : int,
-                        jprocs       : int,
-                        kprocs       : int) -> np.ndarray:
+def unsort_FLASH_field(
+    field_sorted : np.ndarray,
+    nxb          : int,
+    nyb          : int,
+    nzb          : int,
+    iprocs       : int,
+    jprocs       : int,
+    kprocs       : int) -> np.ndarray:
 
     # Note: This function expects field_sorted to already be transposed to (x,y,z)
     # from the original (y,z,x) format
@@ -146,15 +168,16 @@ def unsort_FLASH_field(field_sorted : np.ndarray,
     return field_unsorted
 
 
-def reformat_FLASH_field(field  : np.ndarray,
-                         nxb    : int,
-                         nyb    : int,
-                         nzb    : int,
-                         iprocs : int,
-                         jprocs : int,
-                         kprocs : int,
-                         debug  : bool,
-                         use_version : str = 'optimized') -> np.ndarray:
+def reformat_FLASH_field(
+    field  : np.ndarray,
+    nxb    : int,
+    nyb    : int,
+    nzb    : int,
+    iprocs : int,
+    jprocs : int,
+    kprocs : int,
+    debug  : bool,
+    use_version : str = 'optimized') -> np.ndarray:
     """
     This function reformats the FLASH block / core format into
     (x,y,z) format for processing in real-space coordinates utilising
@@ -175,6 +198,11 @@ def reformat_FLASH_field(field  : np.ndarray,
 
     """
 
+    out = np.zeros((nxb*iprocs,
+                   nyb*jprocs,
+                   nzb*kprocs),
+                  dtype=field.dtype)
+
     if debug:
         print(f"reformat_FLASH_field: nxb = {nxb}")
         print(f"reformat_FLASH_field: nyb = {nyb}")
@@ -194,7 +222,8 @@ def reformat_FLASH_field(field  : np.ndarray,
     # has to be the same dtype as input field (single precision)
     # swap axes to get the correct orientation
     # x = 0, y = 1, z = 2
-    return np.transpose(sort_func(field, 
+        
+    out = np.transpose(sort_func(field, 
                                   nxb, 
                                   nyb, 
                                   nzb, 
@@ -202,6 +231,8 @@ def reformat_FLASH_field(field  : np.ndarray,
                                   jprocs, 
                                   kprocs),
                         (2,1,0))
+    
+    return out
 
 
 def benchmark_versions(field, nxb, nyb, nzb, iprocs, jprocs, kprocs):

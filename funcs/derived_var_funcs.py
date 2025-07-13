@@ -15,9 +15,7 @@
 
 # python dependencies
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
-from typing import Tuple, Optional, Union
 
 pyfftw_import = False
 try: 
@@ -43,10 +41,11 @@ else:
     fftshift = np.fft.fftshift
 
 # import derivative stencils
-from .derivatives_numba import Derivative
-from .tensor_operations import TensorOperations
-from .vector_operations import VectorOperations
-from .scalar_operations import ScalarOperations
+from .derivative.derivatives_numba import Derivative
+from .tensor import TensorOperations
+from .vector import VectorOperations
+from .scalar import ScalarOperations
+from .spectral import SpectralOperations
 
 ## ###############################################################
 ## Global variables
@@ -70,18 +69,20 @@ boundary_lookup = {0: 'periodic',
 
 class DerivedVars(ScalarOperations,
                   VectorOperations,
-                  TensorOperations):
+                  TensorOperations,
+                  SpectralOperations):
     """
     Class for calculating derived variables from the magnetic field, velocity field, and density field.
     """
     
-    def __init__(self, 
-                 L              : float    = [1.0,1.0,1.0],
-                 stencil        : int      = 2,
-                 bcs            : str      = "000",
-                 mu0            : float    = 4*np.pi,
-                 num_of_dims    : int      = 3,
-                 debug          : bool     = False):
+    def __init__(
+        self, 
+        L              : float    = [1.0,1.0,1.0],
+        stencil        : int      = 2,
+        bcs            : str      = "000",
+        mu0            : float    = 4*np.pi,
+        num_of_dims    : int      = 3,
+        debug          : bool     = False):
         """
         Initialize the derived variable class
 

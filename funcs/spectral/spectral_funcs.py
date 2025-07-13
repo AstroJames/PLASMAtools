@@ -1,5 +1,8 @@
 """
-    PLASMAtools: Power Spectra Functions
+
+    LEGACY MODULE: PLASMAtools Spectral Functions
+
+    PLASMAtools: Spectral Functions
 
     Functions for calculating power spectra, and performing spherical and cylindrical integration.
     
@@ -16,525 +19,20 @@
 ## IMPORTS
 ## ###############################################################
 
+"""
+
+"""
 import numpy as np
-import multiprocessing
-from numba import njit, prange, types
-import numba
+from .core_functions import *
+from .utils import *
 
-pyfftw_import = False
-try: 
-    import pyfftw
-    pyfftw_import = True
-    pyfftw.interfaces.cache.enable()
-    threads = multiprocessing.cpu_count()
-except ImportError:
-    print("pyfftw not installed, using scipy's serial fft")
-
-if pyfftw_import:
-    # Use pyfftw for faster FFTs if available
-    pyfftw.config.NUM_THREADS = threads
-    fftn = pyfftw.interfaces.numpy_fft.fftn
-    ifftn = pyfftw.interfaces.numpy_fft.ifftn
-    rfftn = pyfftw.interfaces.numpy_fft.rfftn
-    irfftn = pyfftw.interfaces.numpy_fft.irfftn
-    fftfreq = pyfftw.interfaces.numpy_fft.fftfreq
-    fftshift = pyfftw.interfaces.numpy_fft.fftshift
-else:
-    # Use numpy's FFT functions
-    fftn = np.fft.fftn
-    ifftn = np.fft.ifftn
-    rfftn = np.fft.rfftn
-    irfftn = np.fft.irfftn
-    fftfreq = np.fft.fftfreq
-    fftshift = np.fft.fftshift
-    
-# Numb signatures for JIT compilation
-
-sig_rad_dist_3D = types.float32[:,:,:](types.UniTuple(types.int64, 3))
-sig_rad_dist_2D = types.float32[:,:](types.UniTuple(types.int64, 2))
-
-sig_sph_int_32 = types.float32[:](types.float32[:,:,:], types.float32[:,:,:], types.float32[:], types.int64)
-sig_sph_int_64 = types.float64[:](types.float64[:,:,:], types.float64[:,:,:], types.float64[:], types.int64)
-
-sig_sph_int_2d_32 = types.float32[:](types.float32[:,:], types.float32[:,:], types.float32[:], types.int64)
-sig_sph_int_2d_64 = types.float64[:](types.float64[:,:], types.float64[:,:], types.float64[:], types.int64)
-
-sig_cyl_int_32 = types.float32[:,:](types.float32[:,:,:], types.float32[:,:,:], types.float32[:,:,:], 
-                                    types.float32[:], types.float32[:], types.int64, types.int64)
-sig_cyl_int_64 = types.float64[:,:](types.float64[:,:,:], types.float64[:,:,:], types.float64[:,:,:], 
-                                     types.float64[:], types.float64[:], types.int64, types.int64)
-
-sig_filter_32 = types.UniTuple(types.float32[:,:,:], 2)(
-    types.float32[:,:,:], types.float32[:,:,:], types.float32[:,:,:],
-    types.float32, types.float32, types.int64, types.float32
-)
 
 ## ###############################################################
 ## Numba Core Spectral Functions
 ## ###############################################################
-@njit(sig_rad_dist_2D, parallel=True, fastmath=True, cache=True)
-def compute_radial_distances_2D(shape : tuple) -> np.ndarray:
-    """
-    Parallel computation of radial distances from center
-    """
-    ny, nx = shape
-    center_y = (ny - 1) / 2.0
-    center_x = (nx - 1) / 2.0
-    
-    r = np.empty(shape, dtype=np.float32)
-    
-    for y in prange(ny):
-        for x in range(nx):
-            dy = y - center_y
-            dx = x - center_x
-            r[y, x] = np.sqrt(dy*dy + dx*dx)
-    return r
 
 
-@njit(sig_rad_dist_3D, parallel=True, fastmath=True, cache=True)
-def compute_radial_distances_3D(shape : tuple) -> np.ndarray:
-    """
-    Parallel computation of radial distances from center
-    """
-    nz, ny, nx = shape
-    center_z = (nz - 1) / 2.0
-    center_y = (ny - 1) / 2.0
-    center_x = (nx - 1) / 2.0
-    
-    r = np.empty(shape, dtype=np.float32)
-    
-    for z in prange(nz):
-        for y in range(ny):
-            for x in range(nx):
-                dz = z - center_z
-                dy = y - center_y
-                dx = x - center_x
-                r[z, y, x] = np.sqrt(dz*dz + dy*dy + dx*dx)
-    return r
-
-
-@njit([sig_sph_int_2d_32, sig_sph_int_2d_64], parallel=True, fastmath=True, cache=True)
-def spherical_integrate_core_2D(data: np.ndarray,
-                               r: np.ndarray,
-                               bin_edges: np.ndarray,
-                               bins: int) -> np.ndarray:
-    """
-    2D spherical integration using thread-local accumulation pattern.
-    """
-    data_flat = data.ravel()
-    r_flat = r.ravel()
-    n_elements = len(data_flat)
-    n_edges = len(bin_edges)
-    
-    # Get number of threads
-    n_threads = numba.config.NUMBA_NUM_THREADS
-    
-    # Create thread-local accumulators
-    local_sums = np.zeros((n_threads, bins), dtype=data.dtype)
-    
-    # Parallel binning
-    for i in prange(n_elements):
-        r_val = r_flat[i]
-        
-        # Binary search for bin
-        if r_val < bin_edges[0]:
-            bin_idx = 0
-        elif r_val >= bin_edges[-1]:
-            bin_idx = n_edges
-        else:
-            left = 0
-            right = n_edges - 1
-            
-            while left < right:
-                mid = (left + right) // 2
-                if r_val < bin_edges[mid]:
-                    right = mid
-                else:
-                    left = mid + 1
-            
-            bin_idx = left
-        
-        # Accumulate
-        if 1 <= bin_idx <= bins:
-            thread_id = numba.get_thread_id()
-            local_sums[thread_id, bin_idx - 1] += data_flat[i]
-    
-    # Merge results
-    radial_sum = np.zeros(bins, dtype=data.dtype)
-    for i in range(bins):
-        for t in range(n_threads):
-            radial_sum[i] += local_sums[t, i]
-    
-    return radial_sum
-
-
-@njit([sig_sph_int_32, sig_sph_int_64], parallel=True, fastmath=True, cache=True)
-def spherical_integrate_core_3D(data : np.ndarray, 
-                                r : np.ndarray,
-                                bin_edges : np.ndarray,
-                                bins : int) -> np.ndarray:
-    """
-    Fully parallel version using thread-local accumulation
-    """
-    data_flat = data.ravel()
-    r_flat = r.ravel()
-    n_elements = len(data_flat)
-    n_edges = len(bin_edges)
-    
-    # Get number of threads
-    n_threads = numba.config.NUMBA_NUM_THREADS
-    
-    # Create thread-local accumulators with matching dtype
-    local_sums = np.zeros((n_threads, bins), dtype=data.dtype)
-    
-    # Parallel binning and accumulation
-    for i in prange(n_elements):
-        r_val = r_flat[i]
-        
-        # Compute bin index
-        if r_val < bin_edges[0]:
-            bin_idx = 0
-        elif r_val >= bin_edges[-1]:
-            bin_idx = n_edges
-        else:
-            left = 0
-            right = n_edges - 1
-            
-            while left < right:
-                mid = (left + right) // 2
-                if r_val < bin_edges[mid]:
-                    right = mid
-                else:
-                    left = mid + 1
-            
-            bin_idx = left
-        
-        # Accumulate into thread-local array
-        if 1 <= bin_idx <= bins:
-            thread_id = numba.get_thread_id()
-            local_sums[thread_id, bin_idx - 1] += data_flat[i]
-    
-    # Merge thread-local results with matching dtype
-    radial_sum = np.zeros(bins, dtype=data.dtype)
-    for i in range(bins):
-        for t in range(n_threads):
-            radial_sum[i] += local_sums[t, i]
-    
-    return radial_sum
-
-
-@njit(parallel=True, fastmath=True, cache=True)
-def compute_cylindrical_distances(shape: tuple) -> tuple:
-    """
-    Compute cylindrical distances (k_perp and k_para) in parallel.
-    """
-    nz, ny, nx = shape
-    center_z = (nz - 1) / 2.0
-    center_y = (ny - 1) / 2.0
-    center_x = (nx - 1) / 2.0
-    
-    k_perp = np.empty(shape, dtype=np.float64)
-    k_para = np.empty(shape, dtype=np.float64)
-    
-    for z in prange(nz):
-        dz = z - center_z
-        for y in range(ny):
-            dy = y - center_y
-            for x in range(nx):
-                dx = x - center_x
-                k_perp[z, y, x] = np.sqrt(dx*dx + dy*dy)
-                k_para[z, y, x] = np.abs(dz)
-    
-    return k_perp, k_para
-
-
-@njit([sig_cyl_int_32, sig_cyl_int_64], parallel=True, fastmath=True, cache=True)
-def cylindrical_integrate_core(data: np.ndarray,
-                              k_perp: np.ndarray,
-                              k_para: np.ndarray,
-                              bin_edges_perp: np.ndarray,
-                              bin_edges_para: np.ndarray,
-                              bins_perp: int,
-                              bins_para: int) -> np.ndarray:
-    """
-    Cylindrical integration using thread-local accumulation.
-    """
-    nz, ny, nx = data.shape
-    n_threads = numba.config.NUMBA_NUM_THREADS
-    
-    # Thread-local accumulators
-    local_sums = np.zeros((n_threads, bins_perp, bins_para), dtype=data.dtype)
-    
-    # Parallel accumulation
-    for z in prange(nz):
-        thread_id = numba.get_thread_id()
-        for y in range(ny):
-            for x in range(nx):
-                k_perp_val = k_perp[z, y, x]
-                k_para_val = k_para[z, y, x]
-                
-                # Find bin indices
-                # Perpendicular bin
-                if k_perp_val < bin_edges_perp[0]:
-                    bin_perp = -1
-                elif k_perp_val >= bin_edges_perp[-1]:
-                    bin_perp = bins_perp
-                else:
-                    left = 0
-                    right = len(bin_edges_perp) - 1
-                    while left < right:
-                        mid = (left + right) // 2
-                        if k_perp_val < bin_edges_perp[mid]:
-                            right = mid
-                        else:
-                            left = mid + 1
-                    bin_perp = left - 1
-                
-                # Parallel bin
-                if k_para_val < bin_edges_para[0]:
-                    bin_para = -1
-                elif k_para_val >= bin_edges_para[-1]:
-                    bin_para = bins_para
-                else:
-                    left = 0
-                    right = len(bin_edges_para) - 1
-                    while left < right:
-                        mid = (left + right) // 2
-                        if k_para_val < bin_edges_para[mid]:
-                            right = mid
-                        else:
-                            left = mid + 1
-                    bin_para = left - 1
-                
-                # Accumulate if in valid bin
-                if 0 <= bin_perp < bins_perp and 0 <= bin_para < bins_para:
-                    local_sums[thread_id, bin_perp, bin_para] += data[z, y, x]
-    
-    # Merge thread results
-    cylindrical_sum = np.zeros((bins_perp, bins_para), dtype=data.dtype)
-    for i in range(bins_perp):
-        for j in range(bins_para):
-            for t in range(n_threads):
-                cylindrical_sum[i, j] += local_sums[t, i, j]
-    
-    return cylindrical_sum
-
-
-@njit(sig_filter_32, parallel=True, fastmath=True, cache=True, 
-      boundscheck=False, nogil=True, inline='always')
-def apply_shell_filter_3d_vectorized(data_real: np.ndarray,
-                                     data_imag: np.ndarray,
-                                     k_mag: np.ndarray,
-                                     k_min: float,
-                                     k_max: float,
-                                     filter_type: int,
-                                     sigma: float) -> tuple:
-    """
-    Apply shell filter in Fourier space using vectorized operations.
-    """
-    nz, ny, nx = data_real.shape
-    out_real = np.empty_like(data_real)  # Use empty instead of zeros
-    out_imag = np.empty_like(data_imag)
-    
-    if filter_type == 0:  # Tophat filter - optimized
-        # Parallel outer loop with optimal scheduling
-        for z in prange(nz):
-            for y in range(ny):
-                # Innermost loop - optimized for vectorization
-                for x in range(nx):
-                    k_val = k_mag[z, y, x]
-                    # Branchless selection using boolean arithmetic
-                    mask = (k_val > k_min) & (k_val <= k_max)
-                    out_real[z, y, x] = data_real[z, y, x] if mask else 0.0
-                    out_imag[z, y, x] = data_imag[z, y, x] if mask else 0.0
-                    
-    else:  # Gaussian filter - optimized
-        # Pre-compute all constants
-        k0 = (k_min + k_max) * 0.5
-        inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
-        
-        for z in prange(nz):
-            for y in range(ny):
-                for x in range(nx):
-                    k_val = k_mag[z, y, x]
-                    k_diff = k_val - k0
-                    # Optimized exponential calculation
-                    weight = np.exp(-k_diff * k_diff * inv_two_sigma_sq)
-                    out_real[z, y, x] = data_real[z, y, x] * weight
-                    out_imag[z, y, x] = data_imag[z, y, x] * weight
-    
-    return out_real, out_imag
-
-
-@njit(fastmath=True)
-def apply_shell_filter_2d(data_real: np.ndarray, data_imag: np.ndarray,
-                         k_mag: np.ndarray, k_min: float, k_max: float) -> tuple:
-    """
-    Apply 2D shell filter in Fourier space.
-    """
-    ny, nx = data_real.shape
-    out_real = np.zeros_like(data_real)
-    out_imag = np.zeros_like(data_imag)
-    
-    for y in range(ny):
-        for x in range(nx):
-            k = k_mag[y, x]
-            if k_min <= k <= k_max:
-                out_real[y, x] = data_real[y, x]
-                out_imag[y, x] = data_imag[y, x]
-    
-    return out_real, out_imag
-
-
-@njit(parallel=True, fastmath=True)
-def compute_k_magnitude_3d(kx: np.ndarray, ky: np.ndarray, kz: np.ndarray) -> np.ndarray:
-    """
-    Compute k magnitude in parallel.
-    """
-    nz, ny, nx = kx.shape
-    k_mag = np.empty((nz, ny, nx), dtype=kx.dtype)
-    
-    for z in prange(nz):
-        for y in range(ny):
-            for x in range(nx):
-                k_mag[z, y, x] = np.sqrt(kx[z, y, x]**2 + 
-                                        ky[z, y, x]**2 + 
-                                        kz[z, y, x]**2)
-    return k_mag
-
-
-@njit(parallel=True, fastmath=True)
-def compute_k_magnitude_2d(kx: np.ndarray, ky: np.ndarray) -> np.ndarray:
-    """
-    Compute 2D k magnitude in parallel.
-    """
-    ny, nx = kx.shape
-    k_mag = np.empty((ny, nx), dtype=kx.dtype)
-    
-    for y in prange(ny):
-        for x in range(nx):
-            k_mag[y, x] = np.sqrt(kx[y, x]**2 + ky[y, x]**2)
-    
-    return k_mag
-
-
-## ###############################################################
-## FFTW Plan Cache
-## ###############################################################
-
-class FFTWPlanCache:
-    """Cache for FFTW plans to avoid recreation overhead."""
-    
-    def __init__(self, 
-                 max_plans=10):
-        self.plans = {}
-        self.max_plans = max_plans
-        self.enabled = pyfftw_import
-        
-        
-    def get_fft_plan(self, 
-                     shape, 
-                     axes, 
-                     forward=True, 
-                     real=False):
-        """Get or create an FFTW plan."""
-        
-        if not self.enabled:
-            return None
-            
-        key = (shape, axes, forward, real)
-        
-        if key in self.plans:
-            return self.plans[key]
-        
-        # Create new plan
-        if len(self.plans) >= self.max_plans:
-            # Remove oldest plan
-            oldest_key = next(iter(self.plans))
-            del self.plans[oldest_key]
-        
-        # Create aligned arrays for plan
-        if real:
-            if forward:
-                input_array = pyfftw.empty_aligned(shape, dtype='float64')
-                output_shape = list(shape)
-                output_shape[axes[-1]] = shape[axes[-1]] // 2 + 1
-                output_array = pyfftw.empty_aligned(output_shape, dtype='complex128')
-                plan = pyfftw.FFTW(input_array, output_array, axes=axes,
-                                  flags=['FFTW_MEASURE'], threads=threads)
-            else:
-                input_shape = list(shape)
-                input_shape[axes[-1]] = shape[axes[-1]] // 2 + 1
-                input_array = pyfftw.empty_aligned(input_shape, dtype='complex128')
-                output_array = pyfftw.empty_aligned(shape, dtype='float64')
-                plan = pyfftw.FFTW(input_array, output_array, axes=axes,
-                                  direction='FFTW_BACKWARD',
-                                  flags=['FFTW_MEASURE'], threads=threads)
-        else:
-            input_array = pyfftw.empty_aligned(shape, dtype='complex128')
-            output_array = pyfftw.empty_aligned(shape, dtype='complex128')
-            direction = 'FFTW_FORWARD' if forward else 'FFTW_BACKWARD'
-            plan = pyfftw.FFTW(input_array, output_array, axes=axes,
-                              direction=direction,
-                              flags=['FFTW_MEASURE'], threads=threads)
-        
-        self.plans[key] = plan
-        return plan
-  
-    
-    def execute_fft(self, 
-                    data, 
-                    axes, 
-                    forward=True, 
-                    real=False, 
-                    norm='forward'):
-        
-        """Execute FFT using cached plan if available."""
-        if not self.enabled:
-            # Fallback to numpy
-            if real:
-                if forward:
-                    return rfftn(data, axes=axes, norm=norm)
-                else:
-                    return irfftn(data, axes=axes, norm=norm)
-            else:
-                if forward:
-                    return fftn(data, axes=axes, norm=norm)
-                else:
-                    return ifftn(data, axes=axes, norm=norm)
-        
-        plan = self.get_fft_plan(data.shape, axes, forward, real)
-        
-        if plan is None:
-            # Fallback if plan creation failed
-            if real:
-                if forward:
-                    return rfftn(data, axes=axes, norm=norm)
-                else:
-                    return irfftn(data, axes=axes, norm=norm)
-            else:
-                if forward:
-                    return fftn(data, axes=axes, norm=norm)
-                else:
-                    return ifftn(data, axes=axes, norm=norm)
-        
-        # Copy data to aligned array
-        plan.input_array[:] = data
-        
-        # Execute
-        result = plan()
-        
-        # Apply normalization
-        if norm == 'forward' and forward:
-            n = np.prod([data.shape[i] for i in axes])
-            result = result / n
-        elif norm == 'forward' and not forward:
-            pass  # No normalization for inverse
-        
-        return result.copy()
-
-
-class SpectraOperations:
+class SpectralOperations:
     
     
     def __init__(self, 
@@ -700,6 +198,83 @@ class SpectraOperations:
         
         return fftshift(out, axes=(0, 1, 2))
 
+
+    def compute_generic_mixed_spectrum_2D(self, 
+                                          field1: np.ndarray,
+                                          field2: np.ndarray) -> np.ndarray:
+        """
+        Compute 2D generic mixed variable power spectrum.
+        
+        Args:
+            field1: First vector field (2, ny, nx)
+            field2: Second vector field (2, ny, nx)
+        
+        Returns:
+            Mixed power spectrum (ny, nx), fftshifted
+        """
+        assert len(field1.shape) == 3, "Field1 should be (2, ny, nx)"
+        assert len(field2.shape) == 3, "Field2 should be (2, ny, nx)"
+        assert field1.shape == field2.shape, "Fields must have same shape"
+        
+        # Ensure data is float32 for memory efficiency
+        if field1.dtype != np.float32:
+            print(f"Converting {field1.dtype} field1 to float32 for memory efficiency")
+            field1 = field1.astype(np.float32)
+        if field2.dtype != np.float32:
+            print(f"Converting {field2.dtype} field2 to float32 for memory efficiency")
+            field2 = field2.astype(np.float32)
+        
+        # Compute FFTs
+        field1_fft = self._do_fft(field1, axes=(1, 2), forward=True,
+                                 real=np.isrealobj(field1), norm='forward')
+        field2_fft = self._do_fft(field2, axes=(1, 2), forward=True,
+                                 real=np.isrealobj(field2), norm='forward')
+        
+        # Compute mixed spectrum
+        mixed_spectrum = compute_mixed_spectrum_2D_core(field1_fft, field2_fft)
+        
+        return fftshift(mixed_spectrum, axes=(0, 1))
+
+
+    def compute_generic_mixed_spectrum_3D(self, 
+                                          field1: np.ndarray, 
+                                          field2: np.ndarray) -> np.ndarray:
+        """
+        Compute generic mixed variable power spectrum: |field1(k) · field2*(k)|
+        
+        This is a general function for computing cross-spectra between any two
+        vector fields.
+        
+        Args:
+            field1: First vector field (3, nz, ny, nx)
+            field2: Second vector field (3, nz, ny, nx)
+        
+        Returns:
+            Mixed power spectrum (nz, ny, nx), fftshifted
+        """
+        assert len(field1.shape) == 4, "Field1 should be (3, nz, ny, nx)"
+        assert len(field2.shape) == 4, "Field2 should be (3, nz, ny, nx)"
+        assert field1.shape == field2.shape, "Fields must have same shape"
+        
+        # Ensure data is float32 for memory efficiency
+        if field1.dtype != np.float32:
+            print(f"Converting {field1.dtype} field1 to float32 for memory efficiency")
+            field1 = field1.astype(np.float32)
+        if field2.dtype != np.float32:
+            print(f"Converting {field2.dtype} field2 to float32 for memory efficiency")
+            field2 = field2.astype(np.float32)
+        
+        # Compute FFTs
+        field1_fft = self._do_fft(field1, axes=(1, 2, 3), forward=True,
+                                 real=np.isrealobj(field1), norm='forward')
+        field2_fft = self._do_fft(field2, axes=(1, 2, 3), forward=True,
+                                 real=np.isrealobj(field2), norm='forward')
+        
+        # Compute mixed spectrum
+        mixed_spectrum = compute_mixed_spectrum_3D_core(field1_fft, field2_fft)
+        
+        return fftshift(mixed_spectrum, axes=(0, 1, 2))
+
     
     def spherical_integrate_2D(self, 
                                data: np.ndarray, 
@@ -717,9 +292,9 @@ class SpectraOperations:
             data = data.astype(np.float32)
         
         # Use JIT function for distances
-        r = compute_radial_distances_2D(data.shape)
+        r = compute_radial_distances_2D_core(data.shape)
         bin_edges = np.linspace(0.5, bins, bins + 1)
-        radial_sum = spherical_integrate_core_2D(data, 
+        radial_sum = spherical_integrate_2D_core(data, 
                                                  r, 
                                                  bin_edges, 
                                                  bins)    
@@ -743,9 +318,9 @@ class SpectraOperations:
             print(f"Converting {data.dtype} data to float32 for memory efficiency")
             data = data.astype(np.float32)
         
-        r = compute_radial_distances_3D(data.shape)
+        r = compute_radial_distances_3D_core(data.shape)
         bin_edges = np.linspace(0.5, bins, bins + 1, dtype=np.float32)
-        radial_sum = spherical_integrate_core_3D(data, 
+        radial_sum = spherical_integrate_3D_core(data, 
                                                  r, 
                                                  bin_edges, 
                                                  bins)
@@ -768,7 +343,7 @@ class SpectraOperations:
             bins_para = N // 2
         
         # Use JIT function for distances
-        k_perp, k_para = compute_cylindrical_distances(data.shape)
+        k_perp, k_para = compute_cylindrical_distances_core(data.shape)
         
         bin_edges_perp = np.linspace(0, bins_perp, bins_perp + 1)
         bin_edges_para = np.linspace(0, bins_para, bins_para + 1)
@@ -822,7 +397,7 @@ class SpectraOperations:
             real_part = np.real(vector_field_fft[comp]).astype(np.float32)
             imag_part = np.imag(vector_field_fft[comp]).astype(np.float32)
             
-            real_filtered, imag_filtered = apply_shell_filter_3d_vectorized(
+            real_filtered, imag_filtered = compute_shell_filter_3D_core(
                 real_part, imag_part, k_mag,
                 k_minus, k_plus, filter_type, sigma
             )
