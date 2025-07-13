@@ -113,10 +113,18 @@ class DerivedVars(ScalarOperations,
         self.d = Derivative(self.stencil)
         
         # add the inherited classes
-        ScalarOperations.__init__(self)
-        VectorOperations.__init__(self,
-                                  self.num_of_dims)
-        TensorOperations.__init__(self)
+        ScalarOperations.__init__(
+            self)
+        VectorOperations.__init__(
+            self,
+            self.num_of_dims)
+        TensorOperations.__init__(
+            self)
+        SpectralOperations.__init__(
+            self,
+            self.num_of_dims,
+            self.L,
+            cache_plans=False)
         
         # Set the number of dimensions
         if self.num_of_dims == 3:
