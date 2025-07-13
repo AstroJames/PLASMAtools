@@ -3,8 +3,24 @@ Type signatures and constants for spectral analysis functions.
 Centralizes all Numba type definitions.
 """
 from numba import types
+import numpy as np
 
-# Numb signatures for JIT compilation
+##############################################################################
+# Global constants
+##############################################################################
+
+TwoPi = 2.0 * np.pi  # 2 * pi constant
+N_COORDS_VEC, X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC = 0, 1, 2, 3  # vector grid dimensions
+N_COORDS_TENS, M_COORDS_TENS, X_GRID_TENS, Y_GRID_TENS, Z_GRID_TENS = 0, 1, 2, 3, 4  # tensor grid dimensions
+X,Y,Z = 0, 1, 2 # indexes 
+DEFAULT_BIN_MIN = 0.5  # the smallest k mode
+DEFAULT_BINS_RATIO = 2  # N // 2
+DEFAULT_SIGMA = 10.0    # for Gaussian bins
+
+
+##############################################################################
+# Type signatures for Numba functions
+##############################################################################
 
 # Distances
 sig_rad_dist_3D = types.float32[:,:,:](
@@ -92,11 +108,3 @@ mixed_spec_sig_64 = types.float64[:,:,:](
     types.complex128[:,:,:,:],
     types.complex128[:,:,:,:]
     )
-
-
-##############################################################################
-# Global constants
-##############################################################################
-
-DEFAULT_BINS_RATIO = 2  # N // 2
-DEFAULT_SIGMA = 10.0    # for Gaussian bins

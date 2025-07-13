@@ -4,7 +4,9 @@ from numba import types
 # Global constants
 ##############################################################################
 
+X,Y,Z = 0, 1, 2 # indexes
 DEFAULT_SIGMA = 10.0    # for Gaussian bins
+
 
 ##############################################################################
 # Type signatures for Numba functions

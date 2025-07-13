@@ -25,7 +25,7 @@ class SpectralOperations:
     
     def __init__(
         self, 
-        L : float = 1.0,
+        L : float = [1.0, 1.0, 1.0],
         cache_plans : bool = False):
         """
         Initialize with optional FFTW plan caching.
@@ -40,6 +40,7 @@ class SpectralOperations:
         """
         self.fft_cache = FFTWPlanCache() if cache_plans else None
         self.L = L
+        
         
     def _do_fft(
         self, 
@@ -57,140 +58,174 @@ class SpectralOperations:
         
         """
         if self.fft_cache is not None:
-            return self.fft_cache.execute_fft(data,
-                                              axes,
-                                              forward,
-                                              real,
-                                              norm)
+            return self.fft_cache.execute_fft(
+                data,
+                axes,
+                forward,
+                real,
+                norm)
         else:
             if real:
                 if forward:
-                    return rfftn(data,
-                                 axes=axes,
-                                 norm=norm)
+                    return rfftn(
+                        data,
+                        axes=axes,
+                        norm=norm)
                 else:
-                    return irfftn(data,
-                                  axes=axes,
-                                  norm=norm)
+                    return irfftn(
+                        data,
+                        axes=axes,
+                        norm=norm)
             else:
                 if forward:
-                    return fftn(data,
-                                axes=axes,
-                                norm=norm)
+                    return fftn(
+                        data,
+                        axes=axes,
+                        norm=norm)
                 else:
-                    return ifftn(data,
-                                 axes=axes,
-                                 norm=norm)
+                    return ifftn(
+                        data,
+                        axes=axes,
+                        norm=norm)
     
     
     def compute_power_spectrum_2D(
         self, 
-        field: np.ndarray) -> np.ndarray:
+        field: np.ndarray,
+        field_name : str = "field") -> np.ndarray:
         """
         Computes 2D power spectrum using cached FFT plans.
         """
         assert len(field.shape) == 3, "Field should be 2D"
         
         # Ensure data is float32 for memory efficiency
-        field = ensure_float32(field, field_name="field")
+        field = ensure_float32(
+            field, 
+            field_name=field_name)
 
-        field_fft = self._do_fft(field, axes=(1, 2), 
-                                 forward=True,
-                                 real=np.isrealobj(field),
-                                 norm='forward')
+        field_fft = self._do_fft(
+            field, 
+            axes=(X_GRID_VEC, Y_GRID_VEC), 
+            forward=True,
+            real=np.isrealobj(field),
+            norm='forward')
         
-        out = np.sum(np.abs(field_fft)**2, 
-                     axis=0)
+        out = np.sum(
+            np.abs(field_fft)**2, 
+            axis=0)
         
         # Handle real FFT
         if np.isrealobj(field) and field_fft.shape[-1] != field.shape[-1]:
             N = field.shape
-            full_out = np.zeros((N[1], N[2]), dtype=out.dtype)
+            full_out = np.zeros((N[X_GRID_VEC],
+                                 N[Y_GRID_VEC]), dtype=out.dtype)
             full_out[:, :out.shape[-1]] = out
-            if N[2] % 2 == 0:
-                full_out[:, -N[2]//2+1:] = out[:, 1:N[2]//2][:, ::-1]
+            if N[Y_GRID_VEC] % 2 == 0:
+                full_out[:, -N[Y_GRID_VEC]//2+1:] = out[:, 1:N[Y_GRID_VEC]//2][:, ::-1]
             else:
-                full_out[:, -N[2]//2:] = out[:, 1:N[2]//2+1][:, ::-1]
+                full_out[:, -N[Y_GRID_VEC]//2:] = out[:, 1:N[Y_GRID_VEC]//2+1][:, ::-1]
             out = full_out
         
-        return fftshift(out, axes=(0, 1))
+        return fftshift(
+            out, 
+            axes=(X, Y))
 
 
     def compute_power_spectrum_3D(
         self, 
-        field: np.ndarray) -> np.ndarray:
+        field: np.ndarray,
+        field_name : str = "field") -> np.ndarray:
         """
         Computes the power spectrum using cached FFT plans.
         """
         assert len(field.shape) == 4, "Field should be 3D"
         
         # Ensure data is float32 for memory efficiency
-        field = ensure_float32(field, field_name="field")
+        field = ensure_float32(
+            field, 
+            field_name=field_name)
         
         # Use cached FFT
-        field_fft = self._do_fft(field, 
-                                 axes=(1, 2, 3), 
-                                 forward=True, 
-                                 real=np.isrealobj(field), norm='forward')
+        field_fft = self._do_fft(
+            field, 
+            axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC), 
+            forward=True, 
+            real=np.isrealobj(field), 
+            norm='forward')
         
         # Compute power spectrum
-        out = np.sum(np.abs(field_fft)**2,
-                     axis=0)
+        out = np.sum(
+            np.abs(field_fft)**2,
+            axis=0)
         
         # Handle real FFT output shape
         if np.isrealobj(field) and field_fft.shape[-1] != field.shape[-1]:
             # Restore full spectrum by mirroring
             N = field.shape
-            full_out = np.zeros((N[1], N[2], N[3]), dtype=out.dtype)
+            full_out = np.zeros((N[X_GRID_VEC],
+                                 N[Y_GRID_VEC],
+                                 N[Z_GRID_VEC]), dtype=out.dtype)
             full_out[:, :, :out.shape[-1]] = out
             # Mirror conjugate parts
-            if N[3] % 2 == 0:
-                full_out[:, :, -N[3]//2+1:] = out[:, :, 1:N[3]//2][:, :, ::-1]
+            if N[Z_GRID_VEC] % 2 == 0:
+                full_out[:, :, -N[Z_GRID_VEC]//2+1:] = out[:, :, 1:N[Z_GRID_VEC]//2][:, :, ::-1]
             else:
-                full_out[:, :, -N[3]//2:] = out[:, :, 1:N[3]//2+1][:, :, ::-1]
+                full_out[:, :, -N[Z_GRID_VEC]//2:] = out[:, :, 1:N[Z_GRID_VEC]//2+1][:, :, ::-1]
             out = full_out
         
-        return fftshift(out, axes=(0, 1, 2))
+        return fftshift(
+            out, 
+            axes=(X, Y, Z))
     
 
     def compute_tensor_power_spectrum(
         self, 
-        field: np.ndarray) -> np.ndarray:
+        field: np.ndarray,
+        field_name : str = "field") -> np.ndarray:
         """
         Computes tensor power spectrum using cached FFT plans.
         """
-        assert field.shape[:2] == (3, 3), "Field should be a 3D tensor field"
+        assert field.shape[:X_GRID_TENS] == (3, 3), "Field should be a 3D tensor field"
         
         # Ensure data is float32 for memory efficiency
-        field = ensure_float32(field, field_name="field")
+        field = ensure_float32(
+            field,
+            field_name=field_name)
         
-        field_fft = self._do_fft(field, 
-                                 axes=(2, 3, 4), 
-                                 forward=True,
-                                 real=np.isrealobj(field),
-                                 norm='forward')
+        field_fft = self._do_fft(
+            field, 
+            axes=(X_GRID_TENS, Y_GRID_TENS, Z_GRID_TENS), 
+            forward=True,
+            real=np.isrealobj(field),
+            norm='forward')
         
-        out = np.sum(np.abs(field_fft)**2, 
-                     axis=(0, 1))
+        out = np.sum(
+            np.abs(field_fft)**2, 
+            axis=(N_COORDS_TENS, M_COORDS_TENS))
         
         # Handle real FFT
         if np.isrealobj(field) and field_fft.shape[-1] != field.shape[-1]:
             N = field.shape
-            full_out = np.zeros((N[2], N[3], N[4]), dtype=out.dtype)
+            full_out = np.zeros((N[X_GRID_TENS],
+                                 N[Y_GRID_TENS],
+                                 N[Z_GRID_TENS]), dtype=out.dtype)
             full_out[:, :, :out.shape[-1]] = out
-            if N[4] % 2 == 0:
-                full_out[:, :, -N[4]//2+1:] = out[:, :, 1:N[4]//2][:, :, ::-1]
+            if N[Z_GRID_TENS] % 2 == 0:
+                full_out[:, :, -N[Z_GRID_TENS]//2+1:] = out[:, :, 1:N[Z_GRID_TENS]//2][:, :, ::-1]
             else:
-                full_out[:, :, -N[4]//2:] = out[:, :, 1:N[4]//2+1][:, :, ::-1]
+                full_out[:, :, -N[Z_GRID_TENS]//2:] = out[:, :, 1:N[Z_GRID_TENS]//2+1][:, :, ::-1]
             out = full_out
         
-        return fftshift(out, axes=(0, 1, 2))
+        return fftshift(
+            out, 
+            axes=(X, Y, Z))
 
 
     def compute_mixed_spectrum_2D(
         self,
         field1: np.ndarray,
-        field2: np.ndarray) -> np.ndarray:
+        field2: np.ndarray,
+        field_name : str = "field") -> np.ndarray:
         """
         Compute 2D generic mixed variable power spectrum.
         
@@ -206,25 +241,42 @@ class SpectralOperations:
         assert field1.shape == field2.shape, "Fields must have same shape"
         
         # Ensure data is float32 for memory efficiency
-        field1 = ensure_float32(field1, field_name="field")
-        field2 = ensure_float32(field2, field_name="field")
+        field1 = ensure_float32(
+            field1,
+            field_name="field")
+        field2 = ensure_float32(
+            field2,
+            field_name="field")
         
         # Compute FFTs
-        field1_fft = self._do_fft(field1, axes=(1, 2), forward=True,
-                                 real=np.isrealobj(field1), norm='forward')
-        field2_fft = self._do_fft(field2, axes=(1, 2), forward=True,
-                                 real=np.isrealobj(field2), norm='forward')
+        field1_fft = self._do_fft(
+            field1, 
+            axes=(X_GRID_VEC, Y_GRID_VEC), 
+            forward=True,
+            real=np.isrealobj(field1),
+            norm='forward')
+        field2_fft = self._do_fft(
+            field2, 
+            axes=(X_GRID_VEC, Y_GRID_VEC), 
+            forward=True,
+            real=np.isrealobj(field2),
+            norm='forward')
         
         # Compute mixed spectrum
-        mixed_spectrum = compute_mixed_spectrum_2D_core(field1_fft, field2_fft)
+        mixed_spectrum = compute_mixed_spectrum_2D_core(
+            field1_fft, 
+            field2_fft)
         
-        return fftshift(mixed_spectrum, axes=(0, 1))
+        return fftshift(
+            mixed_spectrum,
+            axes=(X, Y))
 
 
     def compute_mixed_spectrum_3D(
         self,
         field1: np.ndarray, 
-        field2: np.ndarray) -> np.ndarray:
+        field2: np.ndarray,
+        field_name : str = "field") -> np.ndarray:
         """
         Compute generic mixed variable power spectrum: |field1(k) · field2*(k)|
         
@@ -243,42 +295,63 @@ class SpectralOperations:
         assert field1.shape == field2.shape, "Fields must have same shape"
         
         # Ensure data is float32 for memory efficiency
-        field1 = ensure_float32(field1, field_name="field")
-        field2 = ensure_float32(field2, field_name="field")
+        field1 = ensure_float32(
+            field1,
+            field_name="field")
+        field2 = ensure_float32(
+            field2,
+            field_name="field")
         
         # Compute FFTs
-        field1_fft = self._do_fft(field1, axes=(1, 2, 3), forward=True,
-                                 real=np.isrealobj(field1), norm='forward')
-        field2_fft = self._do_fft(field2, axes=(1, 2, 3), forward=True,
-                                 real=np.isrealobj(field2), norm='forward')
+        field1_fft = self._do_fft(
+            field1, 
+            axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC), 
+            forward=True,
+            real=np.isrealobj(field1),
+            norm='forward')
+        field2_fft = self._do_fft(
+            field2, 
+            axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC), 
+            forward=True,
+            real=np.isrealobj(field2), 
+            norm='forward')
         
         # Compute mixed spectrum
-        mixed_spectrum = compute_mixed_spectrum_3D_core(field1_fft, field2_fft)
+        mixed_spectrum = compute_mixed_spectrum_3D_core(
+            field1_fft, 
+            field2_fft)
         
-        return fftshift(mixed_spectrum, axes=(0, 1, 2))
+        return fftshift(
+            mixed_spectrum, 
+            axes=(X, Y, Z))
 
     
     def spherical_integrate_2D(
         self, 
         field: np.ndarray, 
-        bins: int = None) -> tuple:
+        bins: int = None,
+        field_name : str = "field") -> tuple:
         """
         2D spherical integration using JIT-compiled functions.
         """
-        N = field.shape[0]
+        N = field.shape[N_COORDS_VEC]
         if not bins:
-            bins = N // 2
+            bins = N // DEFAULT_BINS_RATIO
             
         # Ensure data is float32 for memory efficiency
-        field = ensure_float32(field, field_name="field")
+        field = ensure_float32(
+            field, 
+            field_name="field")
         
         # Use JIT function for distances
-        r = compute_radial_distances_2D_core(field.shape)
-        bin_edges = np.linspace(0.5, bins, bins + 1)
-        radial_sum = spherical_integrate_2D_core(field, 
-                                                 r, 
-                                                 bin_edges, 
-                                                 bins)    
+        r = compute_radial_distances_2D_core(
+            field.shape)
+        bin_edges = np.linspace(DEFAULT_BIN_MIN, bins, bins + 1)
+        radial_sum = spherical_integrate_2D_core(
+            field, 
+            r, 
+            bin_edges, 
+            bins)    
         k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
     
         return k_modes, radial_sum
@@ -287,23 +360,28 @@ class SpectralOperations:
     def spherical_integrate_3D(
         self, 
         field: np.ndarray, 
-        bins: int = None) -> tuple:
+        bins: int = None,
+        field_name : str = "field") -> tuple:
         """
         3D spherical integration (already optimized).
         """
-        N = field.shape[0]
+        N = field.shape[N_COORDS_VEC]
         if not bins:
-            bins = N // 2
+            bins = N // DEFAULT_BINS_RATIO
             
         # Ensure data is float32 for memory efficiency
-        field = ensure_float32(field, field_name="field")
+        field = ensure_float32(
+            field,
+            field_name="field")
         
-        r = compute_radial_distances_3D_core(field.shape)
-        bin_edges = np.linspace(0.5, bins, bins + 1, dtype=np.float32)
-        radial_sum = spherical_integrate_3D_core(field, 
-                                                 r, 
-                                                 bin_edges, 
-                                                 bins)
+        r = compute_radial_distances_3D_core(
+            field.shape)
+        bin_edges = np.linspace(DEFAULT_BIN_MIN, bins, bins + 1, dtype=np.float32)
+        radial_sum = spherical_integrate_3D_core(
+            field, 
+            r, 
+            bin_edges, 
+            bins)
         k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
         
         return k_modes, radial_sum
@@ -317,11 +395,11 @@ class SpectralOperations:
         """
         Cylindrical integration using JIT-compiled functions.
         """
-        N = field.shape[0]
+        N = field.shape[N_COORDS_VEC]
         if bins_perp == 0:
-            bins_perp = N // 2
+            bins_perp = N // DEFAULT_BINS_RATIO
         if bins_para == 0:
-            bins_para = N // 2
+            bins_para = N // DEFAULT_BINS_RATIO
             
         # Ensure data is float32 for memory efficiency
         field = ensure_float32(field, field_name="field")
@@ -329,8 +407,8 @@ class SpectralOperations:
         # Use JIT function for distances
         k_perp, k_para = compute_cylindrical_distances_core(field.shape)
         
-        bin_edges_perp = np.linspace(0, bins_perp, bins_perp + 1)
-        bin_edges_para = np.linspace(0, bins_para, bins_para + 1)
+        bin_edges_perp = np.linspace(DEFAULT_BIN_MIN, bins_perp, bins_perp + 1)
+        bin_edges_para = np.linspace(DEFAULT_BIN_MIN, bins_para, bins_para + 1)
         
         # Use JIT function for integration
         cylindrical_sum = cylindrical_integrate_core(
@@ -351,36 +429,40 @@ class SpectralOperations:
         k_minus_dk: float,
         k_plus_dk: float,
         filter: str = 'tophat',
-        sigma: float = DEFAULT_SIGMA) -> np.ndarray:
+        sigma: float = DEFAULT_SIGMA,
+        field_name : str = "field") -> np.ndarray:
         """
         Extract shell using JIT-compiled filter application.
         """
-        k_minus = 2 * np.pi / self.L * k_minus_dk
-        k_plus = 2 * np.pi / self.L * k_plus_dk
+        k_minus = TwoPi / self.L[X] * k_minus_dk
+        k_plus = TwoPi / self.L[X] * k_plus_dk
         
         # Ensure data is float32 for memory efficiency
-        field = ensure_float32(field, field_name="field")
+        field = ensure_float32(
+            field, 
+            field_name="field")
         
         # FFT
-        field_fft = self._do_fft(field,
-                                 axes=(1, 2, 3),
-                                 forward=True, 
-                                 real=False, 
-                                 norm='forward')
+        field_fft = self._do_fft(
+            field,
+            axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC),
+            forward=True, 
+            real=False, 
+            norm='forward')
         
         # Compute k magnitudes
-        N = field.shape[1]
-        kx = 2 * np.pi * fftfreq(N, d=self.L/N)
-        ky = 2 * np.pi * fftfreq(N, d=self.L/N)
-        kz = 2 * np.pi * fftfreq(N, d=self.L/N)
+        N = field.shape
+        kx = TwoPi * fftfreq(N[X_GRID_VEC], d=self.L[X]/N[X_GRID_VEC])
+        ky = TwoPi * fftfreq(N[Y_GRID_VEC], d=self.L[Y]/N[Y_GRID_VEC])
+        kz = TwoPi * fftfreq(N[Z_GRID_VEC], d=self.L[Z]/N[Z_GRID_VEC])
         kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
-        k_mag = np.sqrt(kx**2 + ky**2 + kz**2).astype(np.float32)
+        k_mag = np.sqrt(kx*kx + ky*ky + kz*kz).astype(np.float32)
         
         # Apply filter using JIT function
         filter_type = 0 if filter == 'tophat' else 1
         
         # Process each component
-        for comp in range(field.shape[0]):
+        for comp in range(field.shape[N_COORDS_VEC]):
             real_part = np.real(field_fft[comp]).astype(np.float32)
             imag_part = np.imag(field_fft[comp]).astype(np.float32)
             
@@ -392,11 +474,12 @@ class SpectralOperations:
             field_fft[comp] = real_filtered + 1j * imag_filtered
         
         # Inverse FFT
-        result = self._do_fft(field_fft, 
-                              axes=(1, 2, 3),
-                              forward=False, 
-                              real=False, 
-                              norm='forward')
+        result = self._do_fft(
+            field_fft, 
+            axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC),
+            forward=False, 
+            real=False, 
+            norm='forward')
         
         return np.real(result)
     
@@ -406,28 +489,35 @@ class SpectralOperations:
         vector_field: np.ndarray,
         k_minus_dk: float,
         k_plus_dk: float,
-        L: list = [1.0, 1.0]) -> np.ndarray:
+        field_name : str = "field") -> np.ndarray:
         """
         2D shell extraction (keeping original implementation for now).
-        
-        #TODO: fix up L here, make it consistent across class.
         """
         N = vector_field.shape
-        kx = 2 * np.pi * fftfreq(N[1], d=L[0]/N[1])
-        ky = 2 * np.pi * fftfreq(N[2], d=L[1]/N[2])
+        kx = TwoPi * fftfreq(N[X_GRID_VEC],d=self.L[X]/N[X_GRID_VEC])
+        ky = TwoPi * fftfreq(N[Y_GRID_VEC], d=self.L[Y]/N[Y_GRID_VEC])
         kx, ky = np.meshgrid(kx, ky, indexing='ij')
         
         # Create filter
-        k_mag = np.sqrt(kx**2 + ky**2)
+        k_mag = np.sqrt(kx*kx + ky*ky)
         mask = np.logical_and(k_mag >= k_minus_dk, k_mag <= k_plus_dk)
         mask = np.stack([mask, mask], axis=0)
         
         # Apply filter in Fourier space
-        vector_fft = fftn(vector_field, axes=(1, 2), norm='forward')
+        vector_fft = fftn(
+            vector_field, 
+            axes=(X_GRID_VEC, Y_GRID_VEC), 
+            norm='forward')
         vector_fft *= mask
         
-        # Inverse transform
-        return np.real(ifftn(vector_fft, axes=(1, 2), norm='forward'))
+        result =np.real(
+            ifftn(
+                vector_fft, 
+                axes=(X_GRID_VEC, Y_GRID_VEC), 
+                norm='forward')
+            )
+        
+        return result
 
         
 class GeneratedFields:
@@ -472,9 +562,11 @@ class GeneratedFields:
 
         # Generate the wavevector
         L = 1
-        kx, ky, kz = np.meshgrid(fftfreq(N, d=L/N), 
-                                fftfreq(N, d=L/N), 
-                                fftfreq(N, d=L/N), indexing='ij')
+        kx, ky, kz = np.meshgrid(
+            fftfreq(N, d=L/N), 
+            fftfreq(N, d=L/N), 
+            fftfreq(N, d=L/N), 
+            indexing='ij')
         k = np.stack((kx, ky, kz), axis=-1)
 
         # Calculate h_plus and h_minus for the selected wavevector
