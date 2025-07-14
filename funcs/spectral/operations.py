@@ -317,12 +317,27 @@ class SpectralOperations:
             norm='forward')
         
         # Compute mixed spectrum
-        mixed_spectrum = compute_mixed_spectrum_3D_core(
+        out = compute_mixed_spectrum_3D_core(
             field1_fft, 
             field2_fft)
         
+        # Handle real FFT output shape
+        if np.isrealobj(field1) and field1_fft.shape[-1] != field1.shape[-1]:
+            # Restore full spectrum by mirroring
+            N = field1.shape
+            full_out = np.zeros((N[X_GRID_VEC],
+                                 N[Y_GRID_VEC],
+                                 N[Z_GRID_VEC]), dtype=out.dtype)
+            full_out[:, :, :out.shape[-1]] = out
+            # Mirror conjugate parts
+            if N[Z_GRID_VEC] % 2 == 0:
+                full_out[:, :, -N[Z_GRID_VEC]//2+1:] = out[:, :, 1:N[Z_GRID_VEC]//2][:, :, ::-1]
+            else:
+                full_out[:, :, -N[Z_GRID_VEC]//2:] = out[:, :, 1:N[Z_GRID_VEC]//2+1][:, :, ::-1]
+            out = full_out
+        
         return fftshift(
-            mixed_spectrum, 
+            out, 
             axes=(X, Y, Z))
 
     
@@ -518,7 +533,70 @@ class SpectralOperations:
             )
         
         return result
-
+    
+    
+    def helmholtz_decomposition(
+        self,
+        vector_field: np.ndarray,
+        field_name: str = "field") -> tuple:
+        """
+        Computes the Helmholtz decomposition of a vector field
+        using reduced spectral space (Nx, Ny, Nz//2+1), which saves memory
+        and is more efficient for large fields.
+        """
+        
+        # Validate input
+        assert len(vector_field.shape) == 4, "Vector field should be (3, Nx, Ny, Nz)"
+        assert vector_field.shape[0] == 3, "First dimension should be 3 (vector components)"
+        
+        vector_field = ensure_float32(
+            vector_field, 
+            field_name=field_name)
+        
+        # Real FFT to reduced spectral space
+        vector_field_fft = self._do_fft(
+            vector_field,
+            axes=(1, 2, 3),
+            forward=True,
+            real=np.isrealobj(vector_field),
+            norm='forward'
+        )
+        
+        # Get reduced spectral shape
+        spectral_shape = vector_field_fft.shape[1:]  # (Nx, Ny, Nz//2+1)
+        
+        # Compute wave numbers for reduced space
+        kx, ky, kz, ksqr = compute_wave_numbers_reduced(
+            spectral_shape, 
+            self.L)
+        
+        # Perform decomposition in reduced space
+        Fhat_irrot, Fhat_solen = helmholtz_decomposition_3D_nb_core(
+            vector_field_fft, 
+            kx, 
+            ky, 
+            kz, 
+            ksqr
+        )
+        
+        # Inverse real FFT directly from reduced space
+        F_irrot = self._do_fft(
+            Fhat_irrot,
+            axes=(1, 2, 3),
+            forward=False,
+            real=True,
+            norm='forward'
+        ).astype(np.float32)
+        
+        F_solen = self._do_fft(
+            Fhat_solen,
+            axes=(1, 2, 3),
+            forward=False,
+            real=True,
+            norm='forward'
+        ).astype(np.float32)
+        
+        return F_irrot, F_solen
         
 class GeneratedFields:
     """

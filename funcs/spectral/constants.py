@@ -108,3 +108,20 @@ mixed_spec_sig_64 = types.float64[:,:,:](
     types.complex128[:,:,:,:],
     types.complex128[:,:,:,:]
     )
+
+# Type signatures for Helmholtz decomposition core functions
+helmholtz_sig_32 = types.UniTuple(types.complex64[:,:,:,:], 2)(
+    types.complex64[:,:,:,:],  # Fhat input
+    types.float32[:,:,:],      # kx
+    types.float32[:,:,:],      # ky  
+    types.float32[:,:,:],      # kz
+    types.float32[:,:,:]       # ksqr
+)
+
+helmholtz_sig_64 = types.UniTuple(types.complex128[:,:,:,:], 2)(
+    types.complex128[:,:,:,:], # Fhat input
+    types.float64[:,:,:],      # kx
+    types.float64[:,:,:],      # ky
+    types.float64[:,:,:],      # kz
+    types.float64[:,:,:]       # ksqr
+)

@@ -445,3 +445,103 @@ def compute_mixed_spectrum_3D_core(
     
     return mixed_spectrum
 
+
+@njit(parallel=True, fastmath=True, cache=True)
+def compute_wave_numbers_reduced(
+    spectral_shape, 
+    L):
+    """
+    Compute wave numbers for reduced spectral space (real FFT)
+    """
+    Nx, Ny, Nz_half = spectral_shape
+    
+    kx = np.empty((Nx, Ny, Nz_half), dtype=np.float32)
+    ky = np.empty((Nx, Ny, Nz_half), dtype=np.float32)
+    kz = np.empty((Nx, Ny, Nz_half), dtype=np.float32)
+    ksqr = np.empty((Nx, Ny, Nz_half), dtype=np.float32)
+    
+    # 1D wave number arrays
+    kx_1d = np.empty(Nx, dtype=np.float32)
+    ky_1d = np.empty(Ny, dtype=np.float32)
+    kz_1d = np.empty(Nz_half, dtype=np.float32)
+    
+    # X frequencies (full range)
+    for i in range(Nx):
+        if i <= Nx // 2:
+            kx_1d[i] = 2.0 * np.pi * i / L[0]
+        else:
+            kx_1d[i] = 2.0 * np.pi * (i - Nx) / L[0]
+    
+    # Y frequencies (full range)
+    for j in range(Ny):
+        if j <= Ny // 2:
+            ky_1d[j] = 2.0 * np.pi * j / L[1]
+        else:
+            ky_1d[j] = 2.0 * np.pi * (j - Ny) / L[1]
+    
+    # Z frequencies (only positive for real FFT)
+    for k in range(Nz_half):
+        kz_1d[k] = 2.0 * np.pi * k / L[2]
+    
+    # Build 3D wave number arrays
+    for i in prange(Nx):
+        for j in range(Ny):
+            for k in range(Nz_half):
+                kx[i, j, k] = kx_1d[i]
+                ky[i, j, k] = ky_1d[j]
+                kz[i, j, k] = kz_1d[k]
+                ksqr[i, j, k] = kx[i, j, k]*kx[i, j, k] + \
+                    ky[i, j, k]*ky[i, j, k] + kz[i, j, k]*kz[i, j, k]
+    
+    # Handle zero mode
+    ksqr[0, 0, 0] = 1.0
+    
+    return kx, ky, kz, ksqr
+
+
+@njit(parallel=True, fastmath=True, cache=True)
+def helmholtz_decomposition_3D_nb_core(
+    Fhat, 
+    kx, 
+    ky, 
+    kz, 
+    ksqr):
+    """
+    Helmholtz decomposition in reduced spectral space
+    """
+    nx, ny, nz_half = Fhat.shape[1:]
+    
+    Fhat_irrot = np.zeros_like(Fhat)
+    Fhat_solen = np.zeros_like(Fhat)
+    
+    for i in prange(nx):
+        for j in range(ny):
+            for k in range(nz_half):
+                k_x = kx[i, j, k]
+                k_y = ky[i, j, k]
+                k_z = kz[i, j, k]
+                k_squared = ksqr[i, j, k]
+                
+                if k_squared > 0:
+                    # Compute k·F
+                    k_dot_F = (k_x * Fhat[0, i, j, k] + 
+                              k_y * Fhat[1, i, j, k] + 
+                              k_z * Fhat[2, i, j, k])
+                    
+                    # Irrotational component
+                    k_dot_F_over_ksqr = k_dot_F / k_squared
+                    Fhat_irrot[0, i, j, k] = k_dot_F_over_ksqr * k_x
+                    Fhat_irrot[1, i, j, k] = k_dot_F_over_ksqr * k_y
+                    Fhat_irrot[2, i, j, k] = k_dot_F_over_ksqr * k_z
+                    
+                    # Solenoidal component
+                    Fhat_solen[0, i, j, k] = Fhat[0, i, j, k] - Fhat_irrot[0, i, j, k]
+                    Fhat_solen[1, i, j, k] = Fhat[1, i, j, k] - Fhat_irrot[1, i, j, k]
+                    Fhat_solen[2, i, j, k] = Fhat[2, i, j, k] - Fhat_irrot[2, i, j, k]
+                else:
+                    # Zero mode
+                    for comp in range(3):
+                        Fhat_irrot[comp, i, j, k] = 0.0 + 0.0j
+                        Fhat_solen[comp, i, j, k] = 0.0 + 0.0j
+    
+    return Fhat_irrot, Fhat_solen

@@ -19,7 +19,9 @@ from .core_functions import (
     spherical_integrate_2D_core,
     cylindrical_integrate_core,
     compute_shell_filter_2D_core,
-    compute_shell_filter_3D_core
+    compute_shell_filter_3D_core,
+    compute_wave_numbers_reduced,
+    helmholtz_decomposition_3D_nb_core,
 )
 
 # Version info
@@ -36,5 +38,7 @@ __all__ = [
     'spherical_integrate_2D_core',
     'cylindrical_integrate_core',
     'compute_shell_filter_2D_core',
-    'compute_shell_filter_3D_core'
+    'compute_shell_filter_3D_core',
+    'compute_wave_numbers_reduced',
+    'helmholtz_decomposition_3D_nb_core',
 ]
