@@ -16,18 +16,19 @@ def compute_radial_distances_2D_core(
     shape : tuple) -> np.ndarray:
     """
     Parallel computation of radial distances from center
+    Shape: (nx, ny)
     """
-    ny, nx = shape
-    center_y = (ny - 1) / 2.0
+    nx, ny = shape
     center_x = (nx - 1) / 2.0
+    center_y = (ny - 1) / 2.0
     
     r = np.empty(shape, dtype=np.float32)
     
-    for y in prange(ny):
-        for x in range(nx):
-            dy = y - center_y
+    for x in prange(nx):
+        for y in range(ny):
             dx = x - center_x
-            r[y, x] = np.sqrt(dy*dy + dx*dx)
+            dy = y - center_y
+            r[x, y] = np.sqrt(dx*dx + dy*dy)
     return r
 
 
@@ -36,21 +37,22 @@ def compute_radial_distances_3D_core(
     shape : tuple) -> np.ndarray:
     """
     Parallel computation of radial distances from center
+    Shape: (nx, ny, nz)
     """
-    nz, ny, nx = shape
-    center_z = (nz - 1) / 2.0
-    center_y = (ny - 1) / 2.0
+    nx, ny, nz = shape
     center_x = (nx - 1) / 2.0
+    center_y = (ny - 1) / 2.0
+    center_z = (nz - 1) / 2.0
     
     r = np.empty(shape, dtype=np.float32)
     
-    for z in prange(nz):
+    for x in prange(nx):
         for y in range(ny):
-            for x in range(nx):
-                dz = z - center_z
-                dy = y - center_y
+            for z in range(nz):
                 dx = x - center_x
-                r[z, y, x] = np.sqrt(dz*dz + dy*dy + dx*dx)
+                dy = y - center_y
+                dz = z - center_z
+                r[x, y, z] = np.sqrt(dx*dx + dy*dy + dz*dz)
     return r
 
 
@@ -171,23 +173,24 @@ def compute_cylindrical_distances_core(
     shape: tuple) -> tuple:
     """
     Compute cylindrical distances (k_perp and k_para) in parallel.
+    Shape: (nx, ny, nz)
     """
-    nz, ny, nx = shape
-    center_z = (nz - 1) / 2.0
-    center_y = (ny - 1) / 2.0
+    nx, ny, nz = shape
     center_x = (nx - 1) / 2.0
+    center_y = (ny - 1) / 2.0
+    center_z = (nz - 1) / 2.0
     
     k_perp = np.empty(shape, dtype=np.float64)
     k_para = np.empty(shape, dtype=np.float64)
     
-    for z in prange(nz):
-        dz = z - center_z
+    for x in prange(nx):
+        dx = x - center_x
         for y in range(ny):
             dy = y - center_y
-            for x in range(nx):
-                dx = x - center_x
-                k_perp[z, y, x] = np.sqrt(dx*dx + dy*dy)
-                k_para[z, y, x] = np.abs(dz)
+            for z in range(nz):
+                dz = z - center_z
+                k_perp[x, y, z] = np.sqrt(dx*dx + dy*dy)
+                k_para[x, y, z] = np.abs(dz)
     
     return k_perp, k_para
 
@@ -203,20 +206,21 @@ def cylindrical_integrate_core(
     bins_para: int) -> np.ndarray:
     """
     Cylindrical integration using thread-local accumulation.
+    Data shape: (nx, ny, nz)
     """
-    nz, ny, nx = data.shape
+    nx, ny, nz = data.shape
     n_threads = numba.config.NUMBA_NUM_THREADS
     
     # Thread-local accumulators
     local_sums = np.zeros((n_threads, bins_perp, bins_para), dtype=data.dtype)
     
     # Parallel accumulation
-    for z in prange(nz):
+    for x in prange(nx):
         thread_id = numba.get_thread_id()
         for y in range(ny):
-            for x in range(nx):
-                k_perp_val = k_perp[z, y, x]
-                k_para_val = k_para[z, y, x]
+            for z in range(nz):
+                k_perp_val = k_perp[x, y, z]
+                k_para_val = k_para[x, y, z]
                 
                 # Find bin indices
                 # Perpendicular bin
@@ -253,7 +257,7 @@ def cylindrical_integrate_core(
                 
                 # Accumulate if in valid bin
                 if 0 <= bin_perp < bins_perp and 0 <= bin_para < bins_para:
-                    local_sums[thread_id, bin_perp, bin_para] += data[z, y, x]
+                    local_sums[thread_id, bin_perp, bin_para] += data[x, y, z]
     
     # Merge thread results
     cylindrical_sum = np.zeros((bins_perp, bins_para), dtype=data.dtype)
@@ -277,37 +281,38 @@ def compute_shell_filter_3D_core(
     sigma: float) -> tuple:
     """
     Apply shell filter in Fourier space using vectorized operations.
+    Data shape: (nx, ny, nz)
     """
-    nz, ny, nx = data_real.shape
+    nx, ny, nz = data_real.shape
     out_real = np.empty_like(data_real)  # Use empty instead of zeros
     out_imag = np.empty_like(data_imag)
     
     if filter_type == 0:  # Tophat filter - optimized
         # Parallel outer loop with optimal scheduling
-        for z in prange(nz):
+        for x in prange(nx):
             for y in range(ny):
                 # Innermost loop - optimized for vectorization
-                for x in range(nx):
-                    k_val = k_mag[z, y, x]
+                for z in range(nz):
+                    k_val = k_mag[x, y, z]
                     # Branchless selection using boolean arithmetic
                     mask = (k_val > k_min) & (k_val <= k_max)
-                    out_real[z, y, x] = data_real[z, y, x] if mask else 0.0
-                    out_imag[z, y, x] = data_imag[z, y, x] if mask else 0.0
+                    out_real[x, y, z] = data_real[x, y, z] if mask else 0.0
+                    out_imag[x, y, z] = data_imag[x, y, z] if mask else 0.0
                     
     else:  # Gaussian filter - optimized
         # Pre-compute all constants
         k0 = (k_min + k_max) * 0.5
         inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma)
         
-        for z in prange(nz):
+        for x in prange(nx):
             for y in range(ny):
-                for x in range(nx):
-                    k_val = k_mag[z, y, x]
+                for z in range(nz):
+                    k_val = k_mag[x, y, z]
                     k_diff = k_val - k0
                     # Optimized exponential calculation
                     weight = np.exp(-k_diff * k_diff * inv_two_sigma_sq)
-                    out_real[z, y, x] = data_real[z, y, x] * weight
-                    out_imag[z, y, x] = data_imag[z, y, x] * weight
+                    out_real[x, y, z] = data_real[x, y, z] * weight
+                    out_imag[x, y, z] = data_imag[x, y, z] * weight
     
     return out_real, out_imag
 
@@ -321,17 +326,18 @@ def compute_shell_filter_2D_core(
     k_max: float) -> tuple:
     """
     Apply 2D shell filter in Fourier space.
+    Data shape: (nx, ny)
     """
-    ny, nx = data_real.shape
+    nx, ny = data_real.shape
     out_real = np.zeros_like(data_real)
     out_imag = np.zeros_like(data_imag)
     
-    for y in range(ny):
-        for x in range(nx):
-            k = k_mag[y, x]
+    for x in range(nx):
+        for y in range(ny):
+            k = k_mag[x, y]
             if k_min <= k <= k_max:
-                out_real[y, x] = data_real[y, x]
-                out_imag[y, x] = data_imag[y, x]
+                out_real[x, y] = data_real[x, y]
+                out_imag[x, y] = data_imag[x, y]
     
     return out_real, out_imag
 
@@ -360,16 +366,17 @@ def compute_k_magnitude_3D_core(
     kz: np.ndarray) -> np.ndarray:
     """
     Compute k magnitude in parallel.
+    Shape: (nx, ny, nz)
     """
-    nz, ny, nx = kx.shape
-    k_mag = np.empty((nz, ny, nx), dtype=kx.dtype)
+    nx, ny, nz = kx.shape
+    k_mag = np.empty((nx, ny, nz), dtype=kx.dtype)
     
-    for z in prange(nz):
+    for x in prange(nx):
         for y in range(ny):
-            for x in range(nx):
-                k_mag[z, y, x] = np.sqrt(kx[z, y, x]**2 + 
-                                        ky[z, y, x]**2 + 
-                                        kz[z, y, x]**2)
+            for z in range(nz):
+                k_mag[x, y, z] = np.sqrt(kx[x, y, z]**2 + 
+                                        ky[x, y, z]**2 + 
+                                        kz[x, y, z]**2)
     return k_mag
 
 
@@ -381,28 +388,28 @@ def compute_mixed_spectrum_2D_core(
     Core function to compute 2D mixed variable power spectrum.
     
     Args:
-        field1_fft: FFT of first field (2, ny, nx)
-        field2_fft: FFT of second field (2, ny, nx)
+        field1_fft: FFT of first field (2, nx, ny)
+        field2_fft: FFT of second field (2, nx, ny)
     
     Returns:
-        Mixed power spectrum (ny, nx)
+        Mixed power spectrum (nx, ny)
     """
-    ny, nx = field1_fft.shape[1:]
-    mixed_spectrum = np.zeros((ny, nx), dtype=np.float32)
+    nx, ny = field1_fft.shape[1:]
+    mixed_spectrum = np.zeros((nx, ny), dtype=np.float32)
     
-    for y in prange(ny):
-        for x in range(nx):
+    for x in prange(nx):
+        for y in range(ny):
             # Dot product: sum over vector components
             dot_real = 0.0
             dot_imag = 0.0
             for comp in range(2):  # 2D case
-                f1 = field1_fft[comp, y, x]
-                f2 = field2_fft[comp, y, x]
+                f1 = field1_fft[comp, x, y]
+                f2 = field2_fft[comp, x, y]
                 dot_real += f1.real * f2.real + f1.imag * f2.imag
                 dot_imag += f1.imag * f2.real - f1.real * f2.imag
             
             # Take magnitude
-            mixed_spectrum[y, x] = np.sqrt(dot_real*dot_real + dot_imag*dot_imag)
+            mixed_spectrum[x, y] = np.sqrt(dot_real*dot_real + dot_imag*dot_imag)
     
     return mixed_spectrum
 
@@ -416,32 +423,32 @@ def compute_mixed_spectrum_3D_core(
     Computes |field1(k) · field2*(k)| where · is dot product and * is complex conjugate.
     
     Args:
-        field1_fft: FFT of first field (3, nz, ny, nx)
-        field2_fft: FFT of second field (3, nz, ny, nx)
+        field1_fft: FFT of first field (3, nx, ny, nz)
+        field2_fft: FFT of second field (3, nx, ny, nz)
     
     Returns:
-        Mixed power spectrum (nz, ny, nx)
+        Mixed power spectrum (nx, ny, nz)
     """
-    nz, ny, nx = field1_fft.shape[1:]
-    mixed_spectrum = np.zeros((nz, ny, nx), dtype=np.float32)
+    nx, ny, nz = field1_fft.shape[1:]
+    mixed_spectrum = np.zeros((nx, ny, nz), dtype=np.float32)
     
     # Compute dot product of field1_fft with complex conjugate of field2_fft
-    for z in prange(nz):
+    for x in prange(nx):
         for y in range(ny):
-            for x in range(nx):
+            for z in range(nz):
                 # Dot product: sum over vector components
                 dot_real = 0.0
                 dot_imag = 0.0
                 for comp in range(3):
                     # field1 · field2* (complex conjugate)
-                    f1 = field1_fft[comp, z, y, x]
-                    f2 = field2_fft[comp, z, y, x]
+                    f1 = field1_fft[comp, x, y, z]
+                    f2 = field2_fft[comp, x, y, z]
                     # Complex multiplication: (a+bi)(c-di) = (ac+bd) + (bc-ad)i
                     dot_real += f1.real * f2.real + f1.imag * f2.imag
                     dot_imag += f1.imag * f2.real - f1.real * f2.imag
                 
                 # Take magnitude: |z| = sqrt(real^2 + imag^2)
-                mixed_spectrum[z, y, x] = np.sqrt(dot_real*dot_real + dot_imag*dot_imag)
+                mixed_spectrum[x, y, z] = np.sqrt(dot_real*dot_real + dot_imag*dot_imag)
     
     return mixed_spectrum
 
