@@ -95,8 +95,8 @@ class DerivedVars(ScalarOperations,
         TensorOperations.__init__(
             self)
         SpectralOperations.__init__(
-            self, 
-            self.L, 
+            self,
+            self.L,
             cache_plans=False)
         
         # Set the number of dimensions
