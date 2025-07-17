@@ -164,12 +164,14 @@ class TransferFunction():
         self.field_lookup = {
             "mag": ["mag", "vel"],
             "vel": ["mag", "vel", "dens", "press"],
+            "dens": ["dens","vel"], 
             "vel_helmholtz": ["vel"]
         }
         
         self.transfer_lookup = {
             "mag": ["Tbb_a", "Tbb_c", "Tub_t", "Tub_p", "Tbu_t", "Tbu_p"],
-            "vel": ["Tuu_a", "Tuu_c", "Tuv_t", "Tuv_p", "Tvu_t", "Tvu_p"]
+            "vel": ["Tuu_a", "Tuu_c", "Tuv_t", "Tuv_p", "Tvu_t", "Tvu_p"],
+            "dens": ["Trrs_a", "Trrc_a", "Trr_c"]
         }
         
         # Initialize fields to None; they will be loaded as needed
@@ -187,6 +189,7 @@ class TransferFunction():
         self.L          = L
         self.direction  = direction
         self.n_cores    = n_cores
+        self.dvf        = DerivedVars()
         
         # Initialize transfer counters
         self.num_of_transfers = 0
@@ -198,15 +201,22 @@ class TransferFunction():
             print(f"TransferFunction: loading field {field}")
             turb.read(field)
             setattr(self, field, getattr(turb,field))
+            # Store also the FFT of the field to save time later
+            #setattr(self, f"{field}_fft", np.fft.fftn(getattr(turb, field), axes=(1, 2, 3), norm='forward'))
+            #setattr()
         del turb
         gc.collect()
+        
+        if self.transfer == "dens":
+            div_u_modes, curl_u_modes = self.dvf.helmholtz_decomposition(self.vel)
+            self.div_u_modes = div_u_modes
+            self.curl_u_modes = curl_u_modes
         
         # Set up the wavenumbers and the grid dimensions
         self.coords, self.nx, self.ny, self.nz = self.vel.shape if self.vel is not None else (None, 0, 0, 0)
         self.kx = np.fft.fftfreq(self.nx) * self.nx / self.L
         self.ky = np.fft.fftfreq(self.ny) * self.ny / self.L
         self.kz = np.fft.fftfreq(self.nz) * self.nz / self.L
-        self.dvf = DerivedVars()
         
         # Set up the bins (logarithmic or custom)
         self.K_bins, self.Q_bins = [], []
@@ -259,8 +269,7 @@ class TransferFunction():
         self.K_bins     = np.concatenate((np.array([1.]), 4.* 2** ((np.arange(0,resolution_exp + 1) - 1.) /4.)))
         self.Q_bins     = self.K_bins.copy() 
         self.n_bins     = len(self.K_bins) - 1
-        
-        
+         
     def create_bins(self) -> None:
         """
         Create logarithmic bins for the transfer analysis based on the specified direction.
@@ -323,7 +332,6 @@ class TransferFunction():
                                 base=np.e)
         self.Q_bins = self.K_bins.copy()
 
-        
     def extract_shell_X(self,
                         vector_field : np.ndarray,
                         k_minus_dk   : float,
@@ -378,8 +386,6 @@ class TransferFunction():
             This method is based on the transfer function code by Philip Grete:
             https://github.com/pgrete/energy-transfer-analysis
         """
-        
-        assert np.shape(vector_field)[0] == 3, "Error: Vector field must be 3D."
 
         def create_filter(kmin, kmax, filter_type):
             kx, ky, kz = np.meshgrid(self.kx, self.ky, self.kz, indexing='ij')
@@ -392,7 +398,12 @@ class TransferFunction():
             # Calculate the filter
             k_filter = filters[filter_type]
             mask = np.logical_and(k_filter >= kmin, k_filter <= kmax)
-            return np.array([mask.astype(float), mask.astype(float), mask.astype(float)])
+            if np.shape(vector_field)[0] == 3:
+                return np.array([mask.astype(float), mask.astype(float), mask.astype(float)])
+            elif np.shape(vector_field)[0] == 2:
+                return np.array([mask.astype(float), mask.astype(float)])
+            elif np.shape(vector_field)[0] == 1:
+                return mask.astype(float)
 
         # Determine the filter type based on the direction
         if self.direction not in ['parallel', 'perp', 'iso']:
@@ -408,6 +419,74 @@ class TransferFunction():
                 axes=(1, 2, 3),
                 norm="forward"))
         
+    def CalcDensTransfer(self, 
+                        idx_K : int, 
+                        idx_Q : int) -> None:
+        """
+        Calculate the mass transfer between different shells in the density 
+        for a given pair of shells (K, Q).
+        
+        Author: James Beattie
+
+        Args:
+            idx_K (int): The index for the K bin.
+            idx_Q (int): The index for the Q bin.
+
+        Raises:
+            AssertionError: If the magnetic or velocity fields are not loaded.
+            ValueError: If an invalid transfer direction is provided.
+
+        Notes:
+
+        Example:
+            # Example call to the function:
+            transfer_result = self.CalcDensTransfer(idx_K=0, idx_Q=1)
+            
+            # The result will be saved to a file named:
+            # {self.write_path}/{self.file_name}/{self.transfer}_{self.direction}_Kbin_0_Qbin_1.txt
+        """
+        
+        assert self.dens is not None, "Density field not loaded."
+        assert self.vel is not None, "Velocity field not loaded."
+        
+        print(f"CalcDensTransfer: computing transfer: {idx_K}, {idx_Q}")
+        
+        if args["debug"]:
+            print("CalcMagTransfer: extracting shells.")
+        # extract the shells
+        dens_K = self.extract_shell_X(self.dens, self.K_bins[idx_K], self.K_bins[idx_K + 1])
+        dens_Q = self.extract_shell_X(self.dens, self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1]) 
+            
+        # Compute the flux
+        if args["debug"]:
+            print("CalcDensTransfer: computing gradient tensor.")
+        grad_dens_Q = self.dvf.scalar_gradient(dens_Q)
+
+        # Compute the flux terms and store them in a dictionary
+        transfer_terms = {
+            'Trrs_a': -np.sum(dens_K * self.dvf.vector_dot_product(self.curl_u_modes,grad_dens_Q)),
+            'Trrc_a': -np.sum(dens_K * self.dvf.vector_dot_product(self.div_u_modes,grad_dens_Q)),
+            'Trr_c': -np.sum(dens_K * dens_Q * self.dvf.vector_divergence(self.div_u_modes))
+        }
+        
+        # clean up
+        del dens_K, dens_Q, grad_dens_Q
+        gc.collect()
+        
+        if args["debug"]:
+            print("CalcDensTransfer: saving results.")
+            
+        # write every pair to disk 
+        header = f"Kbin, Qbin, {', '.join(transfer_terms.keys())}"
+        value_line = f"{idx_K}, {idx_Q}, {', '.join(f'{value}' for value in transfer_terms.values())}"
+        outfilename = f"{self.write_path}/{self.file_name}/{self.transfer}_{self.direction}_Kbin_{str(idx_K)}_Qbin_{str(idx_Q)}.txt"
+        with open(outfilename, 'w') as file:
+            file.write(f"{header}\n")
+            file.write(f'{value_line}')
+            
+        self.transfer_counter += 1
+        if self.transfer_counter % 20 == 0:
+            print(f"CalcDensTransfer: Number of bin pairs left to compute: {self.transfer_counter/self.num_of_transfers}")
                 
     def CalcMagTransfer(self, 
                         idx_K : int, 
@@ -684,7 +763,8 @@ class TransferFunction():
             "mag": self.CalcMagTransfer,
             "vel": None,            # Placeholder for velocity transfer function
             "vel_helmholtz": None,  # Placeholder for Helmholtz decomposition transfer function
-            "mag_helicity": None    # Placeholder for magnetic helicity transfer function
+            "mag_helicity": None,    # Placeholder for magnetic helicity transfer function
+            "dens": self.CalcDensTransfer
         }
 
         print(f"compute_transfers: selecting {self.transfer} transfer functions")

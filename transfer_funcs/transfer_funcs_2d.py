@@ -177,7 +177,8 @@ class TransferFunction():
         
         self.transfer_lookup = {
             "mag": ["Tbb_a", "Tbb_c"],#, "Tub_t", "Tub_p", "Tbu_t", "Tbu_p"],
-            "vel": ["Tuu_a", "Tuu_c"]#, "Tuv_t", "Tuv_p", "Tvu_t", "Tvu_p"]
+            "vel": ["Tuu_a", "Tuu_c"],#, "Tuv_t", "Tuv_p", "Tvu_t", "Tvu_p"]
+            "dens": ["Trrs_a", "Trrc_a", "Trr_c"]
         }
         
         # Initialize fields to None; they will be loaded as needed
@@ -202,28 +203,34 @@ class TransferFunction():
         self.transfer_counter = 0
         
         # Load the required fields based on the transfer type
-
-
-        # Read velocity components (in quasi 3D)
-        # vel_3d = np.array([self.load_component("mag","x"),
-        #                    self.load_component("mag","y"),
-        #                    self.load_component("mag","z")])
         
         # Read density slice (in 2D)
-        magx = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_magx.h5", "r")["magx_slice"][:, :])
-        magy = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_magy.h5", "r")["magy_slice"][:, :])
-        #magz = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_magz.h5", "r")["magz_slice"][:, :])
-        velx = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_velx.h5", "r")["velx_slice"][:, :])
-        vely = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_vely.h5", "r")["vely_slice"][:, :])
-        dens_2d = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_dens.h5", "r")["dens_slice"][:, :])
-        
-        vel_2d = np.sqrt(dens_2d)*np.array([velx,vely])
-        mag_2d = np.array([magx,magy])
-
-        setattr(self, "mag", mag_2d)
+        dens_2d = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_dens_slice_z.h5", "r")["dens_slice"][:, :])
+        velx = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_velx_slice_z.h5", "r")["velx_slice"][:, :])
+        vely = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_vely_slice_z.h5", "r")["vely_slice"][:, :])
+        vel_2d = np.array([velx,vely])
         setattr(self, "vel", vel_2d)
         setattr(self, "dens", dens_2d)
-    
+        
+        if self.transfer == "vel" or self.transfer == "mag":
+            magx = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_magx_slice_z.h5", "r")["magx_slice"][:, :])
+            magy = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_magy_slice_z.h5", "r")["magy_slice"][:, :])
+            mag_2d = np.array([magx,magy])
+            setattr(self, "mag", mag_2d)
+            if self.transfer == "mag":
+                setattr(self,"mag_fft",np.fft.fftn(self.mag,norm='forward',axes=(1, 2)))
+            if self.transfer == "vel":
+                setattr(self,"vel_fft",np.fft.fftn(self.vel,norm='forward',axes=(1, 2)))
+                
+            
+        if self.transfer == "dens":
+            velx_c = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_velx_lt_slice_z.h5", "r")["velx_lt_slice"][:, :])
+            vely_c = self.block_reduce(h5py.File(f"{self.read_path}{self.file_name}_vely_lt_slice_z.h5", "r")["vely_lt_slice"][:, :])
+            setattr(self, "vel_c",  np.array([velx_c,vely_c]))
+            setattr(self, "vel_s", np.array([velx_c,vely_c]) - np.array([velx,vely]))
+            setattr(self,"dens_fft",np.fft.fftn(np.array([self.dens]),norm='forward',axes=(1, 2)))
+            
+            
         # Set up the wavenumbers and the grid dimensions
         self.coords, self.nx, self.ny = self.vel.shape if self.vel is not None else (None, 0, 0, 0)
         self.kx = np.fft.fftfreq(self.nx) * self.nx / self.L[0]
@@ -431,14 +438,17 @@ class TransferFunction():
             return np.array([mask.astype(float), mask.astype(float)])
 
         # Inverse FFT with just the wavenumbers from the shell 
-        return np.real(
-            np.fft.ifftn(
-                create_filter(k_minus_dk, k_plus_dk, 'twod') * np.fft.fftn(
-                    vector_field,
-                    norm='forward',
-                    axes=(1, 2)),
-                axes=(1, 2),
-                norm="forward"))
+        if self.transfer == "vel" or self.transfer == "mag":
+            return np.real(
+                np.fft.ifftn(
+                    create_filter(k_minus_dk, k_plus_dk, 'twod') * vector_field,
+                    axes=(1, 2),
+                    norm="forward"))
+        if self.transfer == "dens":
+            return np.real(
+                np.fft.ifftn(
+                    create_filter(k_minus_dk, k_plus_dk, 'twod') * vector_field,
+                    norm="forward"))
 
 
     def CalcVelTransfer(self, 
@@ -490,11 +500,8 @@ class TransferFunction():
         if args["debug"]:
             print("CalcVelTransfer: extracting shells.")
         # extract the shells
-        u_K_2d       = self.extract_shell_X(self.vel, self.K_bins[idx_K], self.K_bins[idx_K + 1])
-        #u_Q_minus_dx = self.extract_shell_X(self.vel[:,:,:,idx_2d-1], self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])        
-        u_Q_2d       = self.extract_shell_X(self.vel, self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])
-        #u_Q_plus_dx  = self.extract_shell_X(self.vel[:,:,:,idx_2d+1], self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])
-        #u_Q_3d       = np.transpose(np.array([2*u_Q_plus_dx, u_Q_2d, 2*u_Q_minus_dx]), (1, 2, 3, 0))
+        u_K_2d       = self.extract_shell_X(self.vel_fft, self.K_bins[idx_K], self.K_bins[idx_K + 1])      
+        u_Q_2d       = self.extract_shell_X(self.vel_fft, self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])
             
         # Compute the flux
         if args["debug"]:
@@ -503,18 +510,7 @@ class TransferFunction():
         d = Derivative()
         grad_f_Q = np.array([[d.gradient(u_Q_2d[0,:,:],1),d.gradient(u_Q_2d[1,:,:],1)],
                              [d.gradient(u_Q_2d[0,:,:],0),d.gradient(u_Q_2d[1,:,:],0)]])
-        
-        # f,ax = plt.subplots(2,2,dpi=150,figsize=(11.5,11.5))
-        # ax[0,0].imshow(np.sum(u_K_2d,axis=0)/np.std(u_K_2d),cmap='cmr.gothic',vmax=2,vmin=0)
-        # ax[0,1].imshow(np.sum(u_Q_2d,axis=0)/np.std(u_Q_2d),cmap='cmr.gothic',vmax=2,vmin=0)
-        # ax[1,0].imshow(np.einsum("ij...,ij...->...",grad_f_Q,grad_f_Q)/np.std(np.einsum("ij...,ij...->...",grad_f_Q,grad_f_Q)),cmap='cmr.gothic',vmax=2,vmin=0)
-        # ax[1,1].imshow(self.dvf.vector_dot_product(u_K_2d, 
-        #                                                  self.dvf.vector_dot_tensor_i_ij(self.vel,
-        #                                                                                  np.einsum("ij...->ji...",grad_f_Q))),
-        #                cmap='cmr.gothic')
-        # plt.savefig(f"./test_plots/fil_{idx_K}_{idx_Q}.png")
-        # plt.close()
-
+    
         # Compute the flux terms and store them in a dictionary
         transfer_terms = {
             'Tuu_a': -np.sum(self.dvf.vector_dot_product(u_K_2d, 
@@ -594,8 +590,8 @@ class TransferFunction():
         if args["debug"]:
             print("CalcMagTransfer: extracting shells.")
         # extract the shells
-        b_K_2d = self.extract_shell_X(self.mag, self.K_bins[idx_K], self.K_bins[idx_K + 1])
-        b_Q_2d = self.extract_shell_X(self.mag, self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])  
+        b_K_2d = self.extract_shell_X(self.mag_fft, self.K_bins[idx_K], self.K_bins[idx_K + 1])
+        b_Q_2d = self.extract_shell_X(self.mag_fft, self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])  
         
         d = Derivative()
         grad_f_Q = np.array([[d.gradient(b_Q_2d[0,:,:],1),d.gradient(b_Q_2d[1,:,:],1)],
@@ -634,6 +630,94 @@ class TransferFunction():
         self.transfer_counter += 1
         if self.transfer_counter % 20 == 0:
             print(f"CalcMagTransfer: Number of bin pairs left to compute: {self.transfer_counter/self.num_of_transfers}")
+    
+    def CalcDensTransfer(self, 
+                        idx_K : int, 
+                        idx_Q : int) -> None:
+        """
+        Calculate the magnetic transfer between different shells in the velocity 
+        and magnetic fields for a given pair of indices (K, Q).
+
+        This method extracts the relevant shells of the magnetic and velocity fields 
+        based on the provided indices, computes the gradient tensors, and then 
+        calculates various components of the magnetic energy transfer, including 
+        advection, compression, tension, and pressure terms. The results are saved 
+        to a file for further analysis.
+        
+        Author: James Beattie
+
+        Args:
+            idx_K (int): The index for the K bin.
+            idx_Q (int): The index for the Q bin.
+
+        Raises:
+            AssertionError: If the magnetic or velocity fields are not loaded.
+            ValueError: If an invalid transfer direction is provided.
+
+        Notes:
+            - The method assumes that the magnetic field (`self.mag`) and velocity 
+            field (`self.vel`) are already loaded into the object.
+            - The computation of transfer terms is based on the gradient tensor of the 
+            extracted shells and the dot products and contractions defined in the 
+            `dvf` (likely a helper class for vector and tensor field operations).
+            - The method saves the computed transfer terms to a text file in a 
+            directory specified by `self.write_path` and `self.file_name`.
+            - This function is based on the energy transfer analysis framework and 
+            can be used for analyzing magnetic energy transfer in simulations.
+
+        Example:
+            # Example call to the function:
+            transfer_result = self.CalcMagTransfer(idx_K=0, idx_Q=1)
+            
+            # The result will be saved to a file named:
+            # {self.write_path}/{self.file_name}/{self.transfer}_{self.direction}_Kbin_0_Qbin_1.txt
+        """
+        
+        assert self.dens is not None, "Density field not loaded."
+        
+        print(f"CalcDensTransfer: computing transfer: {idx_K}, {idx_Q}")
+        
+        if args["debug"]:
+            print("CalcDensTransfer: extracting shells.")
+        # extract the shells
+        dens_K_2d = self.extract_shell_X(self.dens_fft, self.K_bins[idx_K], self.K_bins[idx_K + 1])
+        dens_Q_2d = self.extract_shell_X(self.dens_fft, self.Q_bins[idx_Q], self.Q_bins[idx_Q + 1])  
+        
+        d = Derivative()
+        grad_dens_Q = np.array([[d.gradient(dens_Q_2d[0,:,:],1)],
+                                [d.gradient(dens_Q_2d[0,:,:],0)]])
+        
+        # Compute the flux
+        if args["debug"]:
+            print("CalcMagTransfer: computing gradient tensor.")
+        #grad_b_Q = self.dvf.gradient_tensor(b_Q)
+
+        # Compute the flux terms and store them in a dictionary
+        transfer_terms = {
+            'Trrs_a': -np.sum(dens_K_2d * self.dvf.vector_dot_product(self.vel_s, grad_dens_Q)),
+            'Trrc_a': -np.sum(dens_K_2d * self.dvf.vector_dot_product(self.vel_c, grad_dens_Q)),
+            'Trr_c': -np.sum(dens_K_2d * dens_Q_2d * (d.gradient(self.vel_c[0,:,:],1) + d.gradient(self.vel_c[1,:,:],0))),
+        }
+        
+        # clean up
+        del dens_K_2d, dens_Q_2d, grad_dens_Q
+        gc.collect()
+        
+        if args["debug"]:
+            print("CalcMagTransfer: saving results.")
+            
+        # write every pair to disk 
+        header = f"Kbin, Qbin, {', '.join(transfer_terms.keys())}"
+        value_line = f"{idx_K}, {idx_Q}, {', '.join(f'{value}' for value in transfer_terms.values())}"
+        outfilename = f"{self.write_path}/{self.file_name}/{self.transfer}_{self.direction}_Kbin_{str(idx_K)}_Qbin_{str(idx_Q)}.txt"
+        with open(outfilename, 'w') as file:
+            file.write(f"{header}\n")
+            file.write(f'{value_line}')
+            
+        self.transfer_counter += 1
+        if self.transfer_counter % 20 == 0:
+            print(f"CalcMagTransfer: Number of bin pairs left to compute: {self.transfer_counter/self.num_of_transfers}")
+    
     
     def read_and_save_results(self) -> None:
         """
@@ -815,7 +899,8 @@ class TransferFunction():
         # Map transfer types to corresponding functions
         transfer_funcs = {
             "mag": self.CalcMagTransfer,
-            "vel": self.CalcVelTransfer,            # Placeholder for velocity transfer function
+            "vel": self.CalcVelTransfer,     
+            "dens": self.CalcDensTransfer,
             "vel_helmholtz": None,  # Placeholder for Helmholtz decomposition transfer function
             "mag_helicity": None    # Placeholder for magnetic helicity transfer function
         }
