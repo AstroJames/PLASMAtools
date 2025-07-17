@@ -38,7 +38,6 @@ def test_pure_alfven_roundtrip():
     assert np.allclose(u_A_r, u_real, atol=1e-12), "Alfvén reconstruction failed!"
     print("Pure Alfvén roundtrip test passed.")
 
-
 def test_completeness():
     N, L = 64, 1.0
     alpha = 0.0  # cold plasma limit
@@ -50,7 +49,6 @@ def test_completeness():
     u_recon = u_s + u_f + u_A
     assert np.allclose(u_recon, u, atol=1e-12), "Completeness failed!"
     print("Completeness passed.")
-
 
 def test_pure_slow_roundtrip():
     N, L = 64, 1.0
