@@ -20,7 +20,7 @@ import numpy as np
 from .core_functions import *
 from .utils import *
 
-class SpectralOperations:
+class SpectralOperations():
     
     
     def __init__(
@@ -39,8 +39,7 @@ class SpectralOperations:
         
         """
         self.fft_cache = FFTWPlanCache() if cache_plans else None
-        self.L = L
-        
+        self.L = L if isinstance(L, list) else [L, L, L]
         
     def _do_fft(
         self, 
@@ -597,7 +596,7 @@ class SpectralOperations:
         ).astype(np.float32)
         
         return F_irrot, F_solen
-        
+            
 class GeneratedFields:
     """
     

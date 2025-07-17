@@ -10,9 +10,9 @@ import numpy as np
 ##############################################################################
 
 TwoPi = 2.0 * np.pi  # 2 * pi constant
+X, Y, Z = 0, 1, 2  # coordinate indices
 N_COORDS_VEC, X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC = 0, 1, 2, 3  # vector grid dimensions
 N_COORDS_TENS, M_COORDS_TENS, X_GRID_TENS, Y_GRID_TENS, Z_GRID_TENS = 0, 1, 2, 3, 4  # tensor grid dimensions
-X,Y,Z = 0, 1, 2 # indexes 
 DEFAULT_BIN_MIN = 0.5  # the smallest k mode
 DEFAULT_BINS_RATIO = 2  # N // 2
 DEFAULT_SIGMA = 10.0    # for Gaussian bins
