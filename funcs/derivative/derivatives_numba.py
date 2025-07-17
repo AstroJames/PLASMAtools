@@ -418,7 +418,7 @@ class Derivative:
 
     def gradient_tensor_fast(self, f3: np.ndarray, L: float) -> np.ndarray:
         """
-        Compute the full 3×3 gradient tensor in a single fused Numba call.
+        Compute the full 3x3 gradient tensor in a single fused Numba call.
         """
         offsets, coeffs = self.offsets1, self.coeffs1
         dr = self.compute_dr(L, f3.shape, 1)
