@@ -534,7 +534,7 @@ class DerivedVars(ScalarOperations,
                      velocity_vector_field : np.ndarray) -> np.ndarray:
         """
         Compute the heating rate of a given species:
-        \dot{Q} = - <P \nabla . u>
+        Heating = - <P nabla . u>
         
         Author: James Beattie
         
