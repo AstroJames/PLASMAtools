@@ -4,6 +4,11 @@ __pycache__/
 *.py[cod]
 *.npy
 *.npz
+*.h5
+*.hdf5
+*.hdf
+*.csv
+.gitignore
 
 # Byte-compiled files
 *.pyc
