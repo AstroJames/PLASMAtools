@@ -4,7 +4,7 @@
 
 from h5py import File
 import numpy as np
-from ..aux_funcs.derived_var_funcs import DerivedVars as DV
+from ..funcs.derived_var_funcs import DerivedVars as DV
 
 ## ###############################################################
 ## Auxillary reading functions (can be jit compiled)
