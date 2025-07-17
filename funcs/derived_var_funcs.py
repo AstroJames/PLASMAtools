@@ -122,7 +122,6 @@ class DerivedVars(ScalarOperations,
             self)
         SpectralOperations.__init__(
             self,
-            self.num_of_dims,
             self.L,
             cache_plans=False)
         
