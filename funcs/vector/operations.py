@@ -35,14 +35,19 @@ class VectorOperations():
         """
         Vector magnitude using fused kernel
         """
-        
+        out = np.zeros_like(vector_field[0,...])
         if self.use_numba:
             if self.num_of_dims == 3 and vector_field.ndim == 4:
-                return vector_magnitude_3D_nb_core(vector_field)
+                out = vector_magnitude_3D_nb_core(
+                    vector_field)
+                return out[np.newaxis,...]
             elif self.num_of_dims == 2 and vector_field.ndim == 3:
-                return vector_magnitude_2D_nb_core(vector_field)
+                out = vector_magnitude_2D_nb_core(
+                    vector_field)
+                return out[np.newaxis,...]
         else:
-            return vector_magnitude_np_core(vector_field)
+            out = vector_magnitude_np_core(vector_field)
+            return out[np.newaxis,...]
     
     
     def vector_dot_product(
@@ -52,16 +57,21 @@ class VectorOperations():
         """
         Vector dot product
         """
-        
+        out = np.zeros_like(vector_field_1[0,...])
         if self.use_numba:
             if self.num_of_dims == 3 and vector_field_1.ndim == 4:
-                return vector_dot_product_3D_nb_core(vector_field_1,
-                                                     vector_field_2)
+                out = vector_dot_product_3D_nb_core(
+                    vector_field_1,
+                    vector_field_2)
+                return out[np.newaxis,...] 
             elif self.num_of_dims == 2 and vector_field_1.ndim == 3:
-                return vector_dot_product_2D_nb_core(vector_field_1,
-                                                     vector_field_2)
+                out = vector_dot_product_2D_nb_core(
+                    vector_field_1,
+                    vector_field_2)
+                return out[np.newaxis,...]
         else:
-            return vector_dot_product_np_core(vector_field_1, vector_field_2)
+            out = vector_dot_product_np_core(vector_field_1, vector_field_2)
+            return out[np.newaxis,...]
     
     
     def vector_cross_product(
@@ -71,20 +81,26 @@ class VectorOperations():
         """
         Vector cross product
         """
-        
+        # preallocate
+        out = np.zeros_like(vector_field_1)
         if self.num_of_dims == 1:
             raise ValueError("Vector cross product is not defined for 1D.")
         
         if self.use_numba:
             if self.num_of_dims == 3 and vector_field_1.ndim == 4:
-                return vector_cross_product_3D_nb_core(vector_field_1,
-                                                       vector_field_2)
+                out = vector_cross_product_3D_nb_core(
+                    vector_field_1,
+                    vector_field_2)
+                return out
             elif self.num_of_dims == 2 and vector_field_1.ndim == 3:
-                return vector_cross_product_2D_nb_core(vector_field_1,
-                                                       vector_field_2)
+                out = vector_cross_product_2D_nb_core(
+                    vector_field_1,
+                    vector_field_2)
+                return out
         else:
             # Fallback to original implementation
-            return vector_cross_product_np_core(vector_field_1, vector_field_2)
+            out = vector_cross_product_np_core(vector_field_1, vector_field_2)
+            return out
     
     
     def vector_normalize(
@@ -94,13 +110,17 @@ class VectorOperations():
         """
         Normalize vector field to unit vectors
         """
-        
+        out = np.zeros_like(vector_field)
         if self.use_numba and self.num_of_dims == 3 and vector_field.ndim == 4:
-            return vector_normalize_3D_nb_core(vector_field,
-                                               epsilon=epsilon)
+            out = vector_normalize_3D_nb_core(
+                vector_field,
+                epsilon=epsilon)
+            return out
         else:
-            return vector_normalize_np_core(vector_field,
-                                            epsilon=epsilon)
+            out = vector_normalize_np_core(
+                vector_field,
+                epsilon=epsilon)
+            return out
     
     
     def vector_triple_product(
@@ -111,15 +131,19 @@ class VectorOperations():
         """
         Compute scalar triple product: vec1 · (vec2 x vec3)
         """
-        
+        out = np.zeros_like(vector_field_1[0,...])
         if self.use_numba and self.num_of_dims == 3 and vector_field_1.ndim == 4:
-            return vector_triple_product_3D_nb_core(vector_field_1,
-                                                    vector_field_2,
-                                                    vector_field_3)
+            out = vector_triple_product_3D_nb_core(
+                vector_field_1,
+                vector_field_2,
+                vector_field_3)
+            return out[np.newaxis,...]
         else:
-            return vector_triple_product_np_core(vector_field_1,
-                                                 vector_field_2,
-                                                 vector_field_3)
+            out = vector_triple_product_np_core(
+                vector_field_1,
+                vector_field_2,
+                vector_field_3)
+            return out[np.newaxis,...]
     
     
     def vector_angle(
@@ -130,15 +154,19 @@ class VectorOperations():
         """
         Compute angle between two vector fields
         """
-        
+        out = np.zeros_like(vector_field_1[0,...])
         if self.use_numba and self.num_of_dims == 3 and vector_field_1.ndim == 4:
-            return vector_angle_3D_nb_core(vector_field_1, 
-                                           vector_field_2, 
-                                           epsilon=epsilon)
+            out = vector_angle_3D_nb_core(
+                vector_field_1, 
+                vector_field_2, 
+                epsilon=epsilon)
+            return out[np.newaxis,...]
         else:
-            return vector_angle_np_core(vector_field_1,
-                                        vector_field_2,
-                                        epsilon=epsilon)
+            out = vector_angle_np_core(
+                vector_field_1,
+                vector_field_2,
+                epsilon=epsilon)
+            return out[np.newaxis,...]
             
 
     def vector_projection(
@@ -148,11 +176,14 @@ class VectorOperations():
         """
         Project vector field 1 onto vector field 2
         """
-        
+        out = np.zeros_like(vector_field_1)
         if self.use_numba and self.num_of_dims == 3 and vector_field_1.ndim == 4:
-            return vector_projection_3D_nb_core(vector_field_1,
-                                                vector_field_2)
-        else:        
-            return vector_projection_np_core(vector_field_1,
-                                             vector_field_2)   
+            out = vector_projection_3D_nb_core(
+                vector_field_1,
+                vector_field_2)
+            return out
+        else:   
+            out = vector_projection_np_core(vector_field_1,
+                                             vector_field_2)      
+            return out 
     
