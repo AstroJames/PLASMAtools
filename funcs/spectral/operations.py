@@ -296,10 +296,10 @@ class SpectralOperations():
         # Ensure data is float32 for memory efficiency
         field1 = ensure_float32(
             field1,
-            field_name="field")
+            field_name=field_name)
         field2 = ensure_float32(
             field2,
-            field_name="field")
+            field_name=field_name)
         
         # Compute FFTs
         field1_fft = self._do_fft(
@@ -386,7 +386,7 @@ class SpectralOperations():
         # Ensure data is float32 for memory efficiency
         field = ensure_float32(
             field,
-            field_name="field")
+            field_name=field_name)
         
         r = compute_radial_distances_3D_core(
             field.shape)
@@ -454,7 +454,7 @@ class SpectralOperations():
         # Ensure data is float32 for memory efficiency
         field = ensure_float32(
             field, 
-            field_name="field")
+            field_name=field_name)
         
         # FFT
         field_fft = self._do_fft(
@@ -502,8 +502,7 @@ class SpectralOperations():
         self,
         vector_field: np.ndarray,
         k_minus_dk: float,
-        k_plus_dk: float,
-        field_name : str = "field") -> np.ndarray:
+        k_plus_dk: float) -> np.ndarray:
         """
         2D shell extraction (keeping original implementation for now).
         """
