@@ -634,7 +634,9 @@ class GeneratedFields:
         np.ndarray: The generated vector field.
         """
         # Create an empty field in Fourier space
-        field_fft = np.zeros((N, N, N, 3), dtype=complex)
+        field_fft = np.zeros(
+            (N, N, N, 3), 
+            dtype=complex)
 
         # Generate the wavevector
         L = 1
