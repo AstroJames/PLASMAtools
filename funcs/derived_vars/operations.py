@@ -127,7 +127,8 @@ class DerivedVars(ScalarOperations,
         finite difference derivative.
         """
         self.stencil = stencil  
-        self._set_derivative(self.stencil)
+        self._set_derivative(
+            self.stencil)
         
         
     def _set_derivative(
@@ -158,7 +159,11 @@ class DerivedVars(ScalarOperations,
         
         """
         
-        out = np.zeros_like(magnetic_vector_field[0])
+        out = np.zeros_like(
+            magnetic_vector_field[X])
+        
+        #TODO: need to fix up z axis to accomodate for only read
+        # FFT (saves factor > 2 in memory but produces Nx, Ny, Nz/2 outputs)
         
         # compute the magnetic helicity   
         out = self.vector_dot_product(
@@ -185,7 +190,8 @@ class DerivedVars(ScalarOperations,
         
         """
         
-        out = np.zeros_like(velocity_vector_field[0])
+        out = np.zeros_like(
+            velocity_vector_field[X])
         
         # compute the kinetic helicity
         out = self.vector_dot_product(
@@ -212,7 +218,8 @@ class DerivedVars(ScalarOperations,
         
         """
         
-        out = np.zeros_like(magnetic_vector_field[0])
+        out = np.zeros_like(
+            magnetic_vector_field[X])
 
         # compute the current helicity
         out = self.vector_dot_product(
@@ -227,16 +234,17 @@ class DerivedVars(ScalarOperations,
         self,
         vector_field: np.ndarray) -> np.ndarray:
         """
-        Compute the gradient tensor of a vector field, fast.
+        Compute the gradient tensor of a vector field, fast :).
         """
         
         out = np.zeros((self.num_of_dims, 
                         self.num_of_dims, 
-                        *vector_field[0].shape),
+                        *vector_field[X].shape),
                        dtype=vector_field.dtype)
         
-        out = self.d.gradient_tensor_fast(vector_field,
-                                           self.L[X])
+        out = self.d.gradient_tensor_fast(
+            vector_field,
+            self.L[X])
         
         return out
 
@@ -255,21 +263,24 @@ class DerivedVars(ScalarOperations,
         """
         
         out = np.zeros((self.num_of_dims, 
-                        *vector_field_1[0].shape),
+                        *vector_field_1[X].shape),
                        dtype=vector_field_1.dtype)
         
-        out = np.array([vector_field_1[X] * self.d.gradient(vector_field_2[coord], 
-                                                              gradient_dir=X, 
-                                                              L=self.L[X],
-                                                              boundary_condition=self.bcs[X]) + 
-                         vector_field_1[Y] * self.d.gradient(vector_field_2[coord], 
-                                                              gradient_dir=Y, 
-                                                              L=self.L[Y],
-                                                              boundary_condition=self.bcs[Y]) +
-                         vector_field_1[Z] * self.d.gradient(vector_field_2[coord], 
-                                                              gradient_dir=Z, 
-                                                              L=self.L[Z],
-                                                              boundary_condition=self.bcs[Z]) for coord in self.coords])
+        out = np.array([vector_field_1[X] * self.d.gradient(
+            vector_field_2[coord], 
+            gradient_dir=X, 
+            L=self.L[X],
+            boundary_condition=self.bcs[X]) + 
+                        vector_field_1[Y] * self.d.gradient(
+                            vector_field_2[coord], 
+                            gradient_dir=Y, 
+                            L=self.L[Y],
+                            boundary_condition=self.bcs[Y]) +
+                         vector_field_1[Z] * self.d.gradient(
+                            vector_field_2[coord], 
+                            gradient_dir=Z, 
+                            L=self.L[Z],
+                            boundary_condition=self.bcs[Z]) for coord in self.coords])
         
         return out
                                       
@@ -330,32 +341,42 @@ class DerivedVars(ScalarOperations,
         # now construct the terms in the vorticity equation
         
         # compute the vorticity, omega = nabla \times u
-        omega = self.vector_curl(velocity_vector_field)
+        omega = self.vector_curl(
+            velocity_vector_field)
         
         # vorticity compression term, - (2/3) (nabla . u) omega
-        compress = - 2.0 * omega/3.0 * self.vector_divergence(velocity_vector_field)   
+        compress = - 2.0 * omega/3.0 * self.vector_divergence(
+            velocity_vector_field)[X]   
         
         # vortex stretching term, omega . nabla u
         grad_u =  self.gradient_tensor(velocity_vector_field)
-        tensor_trace = (1./self.num_of_dims) * np.einsum('...,ij...->ij...',
-                                                            np.einsum("ii...",grad_u),
-                                                            np.identity(self.num_of_dims))
-        stretch = self.vector_dot_tensor_i_ij(omega, grad_u - tensor_trace)
+        
+        stretch_tensor = self.orthogonal_tensor_decomposition(
+            grad_u,
+            sym=True)
+        
+        stretch = self.vector_dot_tensor_i_ij(
+            omega, 
+            stretch_tensor)
         
         # if the magnetic and density is not None, compute the magnetic terms
         if ( magnetic_vector_field is not None ) and ( density_scalar_field is not None ):
                     
             # magnetic baroclinic term, 1/rho^2 nabla rho \times nabla b^2 / 2mu_0
             baroclinic_magnetic = (1./density_scalar_field[X]**2) * self.vector_cross_product(
-                self.scalar_gradient(np.array([self.vector_dot_product(magnetic_vector_field,
-                                                             magnetic_vector_field) / (2 * self.mu0)])),
-                self.scalar_gradient(density_scalar_field))
+                self.scalar_gradient(
+                    self.vector_dot_product(
+                        magnetic_vector_field,
+                        magnetic_vector_field) / (2 * self.mu0)),
+                self.scalar_gradient(
+                    density_scalar_field))
             
             # magnetic tension term 1/\mu_0 \nabla \times (1/\rho) b . \nabla b)
             tension = self.vector_curl(
                 (1./density_scalar_field[X]) * self.vector_dot_tensor_i_ij(
                     magnetic_vector_field,
-                    self.gradient_tensor(magnetic_vector_field)) / self.mu0
+                    self.gradient_tensor(
+                        magnetic_vector_field)) / self.mu0
                 )
             
         # if density and pressure is not None, compute the baroclinic term
@@ -363,8 +384,10 @@ class DerivedVars(ScalarOperations,
             
             # baroclinic term, 1/\rho^2 \nabla p \times \nabla \rho
             baroclinic = (1/ density_scalar_field[X]**2) * self.vector_cross_product(
-                self.scalar_gradient(pressure_scalar_field),
-                self.scalar_gradient(density_scalar_field)
+                self.scalar_gradient(
+                    pressure_scalar_field),
+                self.scalar_gradient(
+                    density_scalar_field)
                 )
             
         return omega, compress, stretch, baroclinic, baroclinic_magnetic, tension
@@ -385,8 +408,10 @@ class DerivedVars(ScalarOperations,
         """
         
         out = np.zeros_like(magnetic_vector_field)
-        out =self.vector_dot_tensor_i_ij(magnetic_vector_field,
-                                      self.gradient_tensor(magnetic_vector_field)) / self.mu0 
+        out =self.vector_dot_tensor_i_ij(
+            magnetic_vector_field,
+            self.gradient_tensor(
+                magnetic_vector_field)) / self.mu0 
         return out
         
         
@@ -418,18 +443,17 @@ class DerivedVars(ScalarOperations,
                         first eigenvalue and so on. Only returned if find_vectors is True.
 
         """
-    
         #define the values of the matrix to be used in computations (NOTE: Assumes all values are real)
-        assert tensor_field.shape[0] == 3 and tensor_field.shape[1] == 3, "Matrix must be 3x3"
+        assert tensor_field.shape[N_COORDS_TENS] == 3 and tensor_field.shape[M_COORDS_TENS] == 3, "Matrix must be 3x3"
         #make sure tensor is symmetric
         assert np.allclose(tensor_field, self.tensor_transpose(tensor_field)), "Matrix must be symmetric"
         
-        a = tensor_field[0,0,:,:,:]
-        b = tensor_field[1,1,:,:,:]
-        c = tensor_field[2,2,:,:,:]
-        d = tensor_field[0,1,:,:,:]
-        e = tensor_field[1,2,:,:,:]
-        f = tensor_field[0,2,:,:,:]
+        a = tensor_field[X,X,:,:,:]
+        b = tensor_field[Y,Y,:,:,:]
+        c = tensor_field[Z,Z,:,:,:]
+        d = tensor_field[X,Y,:,:,:]
+        e = tensor_field[Y,Z,:,:,:]
+        f = tensor_field[X,Z,:,:,:]
 
         #begin the computations
         x1 = a**2 + b**2 + c**2 - a*b - a*c - b*c+3*(d**2 + f**2 + e**2)
@@ -437,25 +461,27 @@ class DerivedVars(ScalarOperations,
                 9*((2*c-a-b)*d**2 + (2*b-a-c)*f**2 + (2*a-b-c)*e**2) - 54*d*e*f
 
         #define what phi is conditional to previous variables
-        condition_list  = [x2>0, x2==0, x2<0]
-        choice_list     = [np.arctan((np.sqrt(4*x1**3-x2**2))/(x2)), 
-                           np.pi/2, 
-                           np.arctan((np.sqrt(4*x1**3-x2**2))/(x2))+np.pi]
+        condition_list  = [x2>0.0, x2==0.0, x2<0.0]
+        choice_list     = [np.arctan((np.sqrt(4.0*x1**3.0-x2**2.0))/(x2)), 
+                           np.pi/2.0, 
+                           np.arctan((np.sqrt(4.0*x1**3.0-x2**2.0))/(x2))+np.pi]
         phi             = np.select(condition_list, choice_list)
 
         #calculate the eigenvalues
         sqrt_x1     = np.sqrt(x1)
-        lambda1     = (a+b+c-2*sqrt_x1*np.cos(phi/3))/3
-        lambda2     = (a+b+c+2*sqrt_x1*np.cos((phi-np.pi)/3))/3
-        lambda3     = (a+b+c+2*sqrt_x1*np.cos((phi+np.pi)/3))/3
+        lambda1     = (a+b+c-2.0*sqrt_x1*np.cos(phi/3.0))/3.0
+        lambda2     = (a+b+c+2.0*sqrt_x1*np.cos((phi-np.pi)/3.0))/3.0
+        lambda3     = (a+b+c+2.0*sqrt_x1*np.cos((phi+np.pi)/3.0))/3.0
         eig_array   = np.array([lambda1, lambda2, lambda3])
 
         #perform the sort, saving indices of sort to use on eigenvectors later
-        idx         = np.argsort(eig_array,
-                                 axis=0)
-        eig_array   = np.take_along_axis(eig_array, 
-                                         idx, 
-                                         axis=0)
+        idx = np.argsort(
+            eig_array,
+            axis=N_COORDS_VEC)
+        eig_array = np.take_along_axis(
+            eig_array, 
+            idx, 
+            axis=N_COORDS_VEC)
         
         if find_vectors:
             #compute the eigenvectors
@@ -471,9 +497,18 @@ class DerivedVars(ScalarOperations,
             del m1, m2, m3, vec1, vec2, vec3
 
             #do the corresponding sort on the vec array
-            vec_array[:,0,:,:,:] = np.take_along_axis(vec_array[:,0,:,:,:], idx, axis=0)
-            vec_array[:,1,:,:,:] = np.take_along_axis(vec_array[:,1,:,:,:], idx, axis=0)
-            vec_array[:,2,:,:,:] = np.take_along_axis(vec_array[:,2,:,:,:], idx, axis=0)
+            vec_array[:,X,:,:,:] = np.take_along_axis(
+                vec_array[:,X,:,:,:], 
+                idx, 
+                axis=N_COORDS_VEC)
+            vec_array[:,Y,:,:,:] = np.take_along_axis(
+                vec_array[:,Y,:,:,:], 
+                idx, 
+                axis=N_COORDS_VEC)
+            vec_array[:,Z,:,:,:] = np.take_along_axis(
+                vec_array[:,Z,:,:,:], 
+                idx, 
+                axis=N_COORDS_VEC)
 
             return eig_array, vec_array
         else:
@@ -489,7 +524,7 @@ class DerivedVars(ScalarOperations,
         if self.num_of_dims == 1:
             raise ValueError("Vector curl is not defined for 1D.")
         elif self.num_of_dims == 2:
-            out = np.zeros_like(vector_field[0])
+            out = np.zeros_like(vector_field[X])
             # 2D curl still uses separate calls (could be optimized similarly)
             return self.d.gradient(vector_field[1], 
                                  gradient_dir=0,
@@ -516,7 +551,7 @@ class DerivedVars(ScalarOperations,
             # Use the optimized fused kernel
             #TODO: implement the boundary conditions
             out = self.d.vector_divergence_fast(vector_field, self.L, self.bcs[0])
-            return out
+            return out[np.newaxis,...]
         else:
             # Fallback for 1D/2D
             out = np.sum(
@@ -526,7 +561,7 @@ class DerivedVars(ScalarOperations,
                                         boundary_condition=self.bcs[coord]) 
                          for coord in range(self.num_of_dims)]),
                 axis=0)
-            return out
+            return out[np.newaxis,...]
     
     
     def heating_rate(self,
@@ -554,7 +589,7 @@ class DerivedVars(ScalarOperations,
         out = np.zeros_like(pressure_scalar_field[0])
         # compute the heating rate
         out =  - np.mean(pressure_scalar_field[X] *
-                         self.vector_divergence(velocity_vector_field))
+                         self.vector_divergence(velocity_vector_field)[X])
         
         return out
         
@@ -659,10 +694,7 @@ class DerivedVars(ScalarOperations,
         ## ---- COMPUTE TANGENT BASIS
         t_basis = vector_field / field_magn
         ## df_j/dx_i: (component-j, gradient-direction-i, x, y, z)
-        gradient_tensor = np.array([
-            self.scalar_gradient(field_component)
-            for field_component in vector_field
-        ])
+        gradient_tensor = self.gradient_tensor(vector_field)
         ## ---- COMPUTE NORMAL BASIS
         ## f_i df_j/dx_i
         n_basis_term1 = np.einsum("i...,ji...->j...", 
