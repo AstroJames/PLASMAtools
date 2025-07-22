@@ -36,6 +36,8 @@ setup(
         "joblib>=1.0.0",
         # File I/O and data handling
         "h5py>=3.0.0",
+        # KDTree for spatial queries
+        "pykdtree>=1.4.2",  
     ],
     extras_require={
         # Fast FFT library (recommended for best performance)
@@ -65,6 +67,7 @@ setup(
             "numba>=0.56.0", 
             "joblib>=1.0.0",
             "mpi4py>=3.1.0",
+            "pykdtree>=1.4.2",
             "fftw3>=0.2.2",
             "black>=21.0",
             "sphinx>=4.0",

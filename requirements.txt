@@ -4,7 +4,7 @@ numpy>=1.20.0
 scipy>=1.7.0
 
 # Fast Fourier Transform libraries
-# pyfftw is the fastest FFT library mentioned in the repository
+# pyfftw is the fastest FFT library in the repo (highly recommended)
 pyfftw>=0.12.0
 
 # Parallelization and JIT compilation
@@ -16,6 +16,9 @@ mpi4py>=3.1.0
 
 # File I/O and data handling
 h5py>=3.0.0
+
+# KDTree for spatial queries
+pykdtree>=1.4.2
 
 # Optional: Additional FFT libraries as fallbacks
 # Uncomment if pyfftw is not available
