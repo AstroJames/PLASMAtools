@@ -17,7 +17,7 @@ Collaborators:  Neco Kriel, Tanisha Ghosal, Anne Noer Kolborg,
 import numpy as np
 
 # import derivative stencils
-from ..derivative.derivatives_numba import Derivative
+from ..derivative.derivatives import Derivative
 from .constants import *
 from .core_functions import *
 from .utils import *
@@ -75,13 +75,31 @@ class DerivedVars(ScalarOperations,
             
         """
         
+        # Type check and convert L to proper format
+        if isinstance(L, np.ndarray):
+            # Convert numpy array to list of floats
+            L = L.astype(float).tolist()
+            if debug:
+                print(f"Warning: L was provided as numpy array, converted to list: {L}")
+        elif isinstance(L, (int, float)):
+            # Single scalar - keep as float
+            L = float(L)
+        elif isinstance(L, (list, tuple)):
+            # Convert all elements to floats
+            try:
+                L = [float(x) for x in L]
+            except (ValueError, TypeError):
+                raise TypeError("All elements in L must be convertible to float")
+        else:
+            raise TypeError(f"L must be a float, int, list, tuple, or numpy array. Got {type(L)}")
+        
         # Set the class variables
-        self.L              = L                                     # domain size
-        self.bcs            = [boundary_lookup[int(list(bcs)[i])] 
-                                for i in range(len(list(bcs)))]     # boundary conditions
-        self.mu0            = mu0                                   # magnetic permeability
-        self.stencil        = stencil                               # finite difference stencil size
-        self.num_of_dims    = num_of_dims                           # number of dimensions in the domain
+        self.L           = L # domain size
+        self.bcs         = [boundary_lookup[int(list(bcs)[i])] 
+                            for i in range(len(list(bcs)))] # boundary conditions
+        self.mu0         = mu0         # magnetic permeability
+        self.stencil     = stencil     # finite difference stencil size
+        self.num_of_dims = num_of_dims # number of dimensions in the domain
         
         # create a derivative object to be shared globally
         self.d = Derivative(self.stencil)
@@ -171,7 +189,7 @@ class DerivedVars(ScalarOperations,
                 magnetic_vector_field),
             magnetic_vector_field)
          
-        return out[np.newaxis, ...]  # Add new axis for compatibility
+        return out
 
 
     def kinetic_helicity(
@@ -199,7 +217,7 @@ class DerivedVars(ScalarOperations,
                 velocity_vector_field),
             velocity_vector_field)
         
-        return out[np.newaxis, ...]  # Add new axis for compatibility
+        return out
     
     
     def current_helicity(
@@ -227,7 +245,7 @@ class DerivedVars(ScalarOperations,
                 magnetic_vector_field) / self.mu0,
             magnetic_vector_field)
 
-        return out[np.newaxis, ...]  # Add new axis for compatibility
+        return out
    
        
     def gradient_tensor(
@@ -526,17 +544,22 @@ class DerivedVars(ScalarOperations,
         elif self.num_of_dims == 2:
             out = np.zeros_like(vector_field[X])
             # 2D curl still uses separate calls (could be optimized similarly)
-            return self.d.gradient(vector_field[1], 
-                                 gradient_dir=0,
-                                 L=self.L[0],
-                                 boundary_condition=self.bcs[0]) - \
-                   self.d.gradient(vector_field[0],
-                                 gradient_dir=1, 
-                                 L=self.L[1],
-                                 boundary_condition=self.bcs[1])
+            return self.d.gradient(
+                vector_field[Y_GRID_VEC], 
+                gradient_dir=X,
+                L=self.L[X],
+                boundary_condition=self.bcs[X]) - \
+                   self.d.gradient(
+                        vector_field[X_GRID_VEC],
+                        gradient_dir=Y, 
+                        L=self.L[Y],
+                        boundary_condition=self.bcs[Y])
         elif self.num_of_dims == 3:
             out = np.zeros_like(vector_field)
-            out =  self.d.vector_curl_fast(vector_field, self.L, self.bcs[0])
+            out =  self.d.vector_curl_fast(
+                vector_field, 
+                self.L, 
+                self.bcs[X])
             return out
     
     def vector_divergence(
@@ -545,12 +568,21 @@ class DerivedVars(ScalarOperations,
         """
         Optimized divergence computation using fused kernel
         """
-        out = np.zeros_like(vector_field[0])
+        
+        vector_field = ensure_float32(
+            vector_field,
+            "vector_field")
+        
+        out = np.zeros_like(
+            vector_field[N_COORDS_VEC])
         
         if self.num_of_dims == 3:
             # Use the optimized fused kernel
             #TODO: implement the boundary conditions
-            out = self.d.vector_divergence_fast(vector_field, self.L, self.bcs[0])
+            out = self.d.vector_divergence_fast(
+                vector_field, 
+                self.L, 
+                self.bcs[X])
             return out[np.newaxis,...]
         else:
             # Fallback for 1D/2D
@@ -564,9 +596,10 @@ class DerivedVars(ScalarOperations,
             return out[np.newaxis,...]
     
     
-    def heating_rate(self,
-                     pressure_scalar_field : np.ndarray,
-                     velocity_vector_field : np.ndarray) -> np.ndarray:
+    def heating_rate(
+        self,
+        pressure_scalar_field : np.ndarray,
+        velocity_vector_field : np.ndarray) -> np.ndarray:
         """
         Compute the heating rate of a given species:
         Heating = - <P nabla . u>
@@ -586,16 +619,20 @@ class DerivedVars(ScalarOperations,
         
         """
         
-        out = np.zeros_like(pressure_scalar_field[0])
+        out = np.zeros_like(
+            pressure_scalar_field[N_COORDS_VEC])
         # compute the heating rate
-        out =  - np.mean(pressure_scalar_field[X] *
-                         self.vector_divergence(velocity_vector_field)[X])
+        out =  - np.mean(
+            pressure_scalar_field[X] *
+            self.vector_divergence(
+                velocity_vector_field)[X])
         
         return out
         
         
-    def vector_laplacian(self,
-                         vector_field : np.ndarray) -> np.ndarray:
+    def vector_laplacian(
+        self,
+        vector_field : np.ndarray) -> np.ndarray:
         """
         Compute the scalar laplacian using finite differences.
         
@@ -610,14 +647,18 @@ class DerivedVars(ScalarOperations,
         
         """
         
-        out = np.zeros_like(vector_field)
-        out = np.array([self.scalar_laplacian(vector_field[coord]) 
-                         for coord in self.coords])
+        out = np.zeros_like(
+            vector_field)
+        out = np.array(
+            [self.scalar_laplacian(
+                vector_field[coord]) 
+             for coord in self.coords])
         return out
 
         
-    def scalar_laplacian(self,
-                         scalar_field : np.ndarray) -> np.ndarray:
+    def scalar_laplacian(
+        self,
+        scalar_field : np.ndarray) -> np.ndarray:
         """
         Compute the scalar laplacian using finite differences.
         
@@ -636,17 +677,20 @@ class DerivedVars(ScalarOperations,
         
         out = np.zeros_like(scalar_field)
         out = np.sum(
-            np.array([self.d.gradient(scalar_field[0],
-                                gradient_dir       = coord,
-                                L                  = self.L[coord],
-                                derivative_order   = 2, 
-                                boundary_condition = self.bcs[coord]) for coord in self.coords]),
-            axis=0)
+            np.array([self.d.gradient(
+                scalar_field[N_COORDS_VEC],
+                gradient_dir       = coord,
+                L                  = self.L[coord],
+                derivative_order   = 2, 
+                boundary_condition = self.bcs[coord]) 
+                      for coord in self.coords]),
+            axis=N_COORDS_VEC)
         return out
 
 
-    def scalar_gradient(self,
-                        scalar_field : np.ndarray) -> np.ndarray:
+    def scalar_gradient(
+        self,
+        scalar_field : np.ndarray) -> np.ndarray:
         """
         Compute the gradient of a scalar field, grad(phi). 
         
@@ -662,16 +706,22 @@ class DerivedVars(ScalarOperations,
         
         """
 
-        out = np.zeros((self.num_of_dims, *scalar_field.shape))
-        out = np.array([self.d.gradient(scalar_field[0], 
-                                         gradient_dir = coord,
-                                         L            = self.L[coord]) 
-                         for coord in self.coords])
+        out = np.zeros((
+            self.num_of_dims, 
+            *scalar_field.shape))
+        
+        out = np.array([
+            self.d.gradient(
+                scalar_field[N_COORDS_VEC], 
+                gradient_dir = coord,
+                L            = self.L[coord]) 
+            for coord in self.coords])
         return out
 
 
-    def compute_TNB_basis(self,
-                          vector_field : np.ndarray) -> np.ndarray:
+    def compute_TNB_basis(
+        self,
+        vector_field : np.ndarray) -> np.ndarray:
         """
         Compute the Fressnet frame of a vector field (TNB basis).
         
@@ -718,8 +768,9 @@ class DerivedVars(ScalarOperations,
         return t_basis, n_basis, b_basis, kappa
 
 
-    def TNB_coordinate_transformation(self,
-                                    vector_field : np.ndarray) -> np.ndarray:
+    def TNB_coordinate_transformation(
+        self,
+        vector_field : np.ndarray) -> np.ndarray:
         """
         Transform a vector field into the Fressnet frame of a vector field (TNB basis).
         
@@ -745,42 +796,23 @@ class DerivedVars(ScalarOperations,
             self.vector_dot_product(vector_field, b_basis)])
     
      
-    def TNB_jacobian_stability_analysis(self,
-                                        vector_field    : np.ndarray,
-                                        traceless       : bool          = True ) -> np.ndarray:
+    def TNB_jacobian_stability_analysis(
+        self,
+        vector_field    : np.ndarray,
+        traceless       : bool = True ) -> np.ndarray:
         """
         Compute the trace, determinant and eigenvalues of the Jacobian of a vector field in the 
-        TNB coordinate system of an underlying vector field.
-        
+        TNB coordinate system of an underlying vector field.        
         See: https://arxiv.org/pdf/2312.15589.pdf
-        
-        Author: James Beattie
-        
-        Args:
-            args (_type_): 
-
-        Returns:
-            _type_: _description_
-        
         """
         
-        def theta_eig(J_thresh  : np.ndarray,
-                    J_3         : np.ndarray) -> np.ndarray:
+        def theta_eig(
+            J_thresh : np.ndarray,
+            J_3 : np.ndarray) -> np.ndarray:
             """
             Compute the angle between the eigenvectors of the Jacobian.
-            
-            See: https://arxiv.org/pdf/2312.15589.pdf
-            
-            Author: James Beattie
-            
-            Args:
-                args (_type_): 
-
-            Returns:
-                _type_: _description_
-            
+            See: https://arxiv.org/pdf/2312.15589.pdf            
             """
-            
             # Two conditions for O and X points
             condition = np.abs(J_3) < J_thresh
             ratio = np.where(condition, 
@@ -800,7 +832,7 @@ class DerivedVars(ScalarOperations,
         # Make jacobian traceless (numerical errors will result in some trace, which is
         # equivalent to div(B) modes)
         if traceless:   
-            jacobian = jacobian - (1/self.num_of_dims) * np.einsum("..., ij... -> ij...",
+            jacobian = jacobian - (1.0/self.num_of_dims) * np.einsum("..., ij... -> ij...",
                                                                    np.einsum("ii...",
                                                                              jacobian),
                                                                    np.eye(self.num_of_dims))
@@ -842,105 +874,105 @@ class DerivedVars(ScalarOperations,
         return trace_M, D, eig_1, eig_2, J_3, J_thresh, theta_eig(J_thresh,J_3)
 
 
-    def classification_of_critical_points(self,
-                                          trace_M  : np.ndarray,
-                                          det_M    : np.ndarray,
-                                          J_3      : np.ndarray,
-                                          J_thresh : np.ndarray,
-                                          eig_1    : np.ndarray,
-                                          eig_2    : np.ndarray) -> np.ndarray:
-            """
-            Classify the critical points of the 2D reduced Jacobian of the B field.
+    def classification_of_critical_points(
+        self,
+        trace_M  : np.ndarray,
+        det_M    : np.ndarray,
+        J_3      : np.ndarray,
+        J_thresh : np.ndarray,
+        eig_1    : np.ndarray,
+        eig_2    : np.ndarray) -> np.ndarray:
+        """
+        Classify the critical points of the 2D reduced Jacobian of the B field.
+    
+        See: https://arxiv.org/pdf/2312.15589.pdf
         
-            See: https://arxiv.org/pdf/2312.15589.pdf
+        Args:
+            trace_M (np.ndarray):   trace of the 2D reduced Jacobian of the B field
+            D (np.ndarray):         determinant of the 2D reduced Jacobian of the B field
+            J_3 (np.ndarray):       J_3 value of the 2D reduced Jacobian of the B field
+            J_thresh (np.ndarray):  J threshold value of the 2D reduced Jacobian of the B field
+            eig_1 (np.ndarray):     eigen value 1 of the 2D reduced Jacobian of the B field
+            eig_2 (np.ndarray):     eigen value 2 of the 2D reduced Jacobian of the B field
             
-            Args:
-                trace_M (np.ndarray):   trace of the 2D reduced Jacobian of the B field
-                D (np.ndarray):         determinant of the 2D reduced Jacobian of the B field
-                J_3 (np.ndarray):       J_3 value of the 2D reduced Jacobian of the B field
-                J_thresh (np.ndarray):  J threshold value of the 2D reduced Jacobian of the B field
-                eig_1 (np.ndarray):     eigen value 1 of the 2D reduced Jacobian of the B field
-                eig_2 (np.ndarray):     eigen value 2 of the 2D reduced Jacobian of the B field
-                
-            Returns:
-                classification_array (np.ndarray): 3D array of the critical point types
-            """
-            # real and imaginary components of the eigenvalues
-            eig1_real = np.real(eig_1)
-            eig2_real = np.real(eig_2)
-            
-            eig1_imag = np.imag(eig_1)
-            eig2_imag = np.imag(eig_2)
-            
-            is_2D = np.isclose(trace_M,0.0,1e-3)
-            is_3D = (is_2D == False)
-            is_real_eig = np.abs(J_3) < J_thresh
-            is_imag_eig = np.abs(J_3) > J_thresh
-            # is_real_eig = np.isclose(np.real(eig_1),0.0,atol=1e-1) & np.isclose(np.real(eig_2),0.0,atol=1e-1)
-            # is_imag_eig = (is_real_eig == False)
-            is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
-            
-            # array initialisation to store each of the 9 critical point types
-            classification_array = np.repeat(np.zeros_like(trace_M)[np.newaxis,...],
-                                            9,
-                                            axis=0)
-            
-            # 3D X point (trace > 0, determinant < 0, real eigenvalues less than 0)
-            classification_array[0,...] = np.logical_and.reduce([is_3D, 
-                                                                is_real_eig, 
-                                                                eig1_real*eig2_real < 0.0])
-            
-            # 3D O point (repelling; trace > 0, determinant > 0, conjugate eigenvalues equal)
-            classification_array[1,...] = np.logical_and.reduce([is_3D, 
-                                                                is_imag_eig, 
-                                                                trace_M > 0.0])
-            
-            # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
-            classification_array[2,...] = np.logical_and.reduce([is_3D, 
-                                                                is_imag_eig, 
-                                                                trace_M < 0.0])
-            
-            # 3D repelling (trace =/= 0, determinant <= 0, real eigenvalues greater than 0)
-            classification_array[3,...] = np.logical_and.reduce([is_3D, 
-                                                                is_real_eig, 
-                                                                eig1_real > 0.0, 
-                                                                eig2_real > 0.0])
-                                                    
-            # 3D attracting (trace =/= 0, determinant <= 0, real eigenvalues less than 0)
-            classification_array[4,...] = np.logical_and.reduce([is_3D, 
-                                                                is_real_eig, 
-                                                                eig1_real < 0.0, 
-                                                                eig2_real < 0.0])
-            
-            # 3D antiparallel (trace =/= 0, determinant < 0, either real component of eigenvalues = 0)
-            classification_array[5,...] = np.logical_and.reduce([is_3D, 
-                                                                is_parallel])
-            
-            # 2D X point (trace = 0, determinant < 0, real component of eigenvalues equal in opposite sign)
-            classification_array[6,...] = np.logical_and.reduce([is_2D, 
-                                                                is_real_eig])
-            
-            # 2D O point (trace = 0, determinant > 0, imaginary component of eigenvalues equal in opposite sign)
-            classification_array[7,...] = np.logical_and.reduce([is_2D, 
-                                                                is_imag_eig])
-            
-            # 2D antiparallel (trace = 0, determinant = 0, all eigenvalues = 0)
-            classification_array[8,...] = np.logical_and.reduce([is_2D, 
-                                                                is_parallel])
-            
-            return classification_array
+        Returns:
+            classification_array (np.ndarray): 3D array of the critical point types
+        """
+        # real and imaginary components of the eigenvalues
+        eig1_real = np.real(eig_1)
+        eig2_real = np.real(eig_2)
+        
+        eig1_imag = np.imag(eig_1)
+        eig2_imag = np.imag(eig_2)
+        
+        is_2D = np.isclose(trace_M,0.0,1e-3)
+        is_3D = (is_2D == False)
+        is_real_eig = np.abs(J_3) < J_thresh
+        is_imag_eig = np.abs(J_3) > J_thresh
+        # is_real_eig = np.isclose(np.real(eig_1),0.0,atol=1e-1) & np.isclose(np.real(eig_2),0.0,atol=1e-1)
+        # is_imag_eig = (is_real_eig == False)
+        is_parallel = np.isclose(np.abs(J_3),J_thresh,1e-3)
+        
+        # array initialisation to store each of the 9 critical point types
+        classification_array = np.repeat(np.zeros_like(trace_M)[np.newaxis,...],
+                                        9,
+                                        axis=0)
+        
+        # 3D X point (trace > 0, determinant < 0, real eigenvalues less than 0)
+        classification_array[0,...] = np.logical_and.reduce([is_3D, 
+                                                            is_real_eig, 
+                                                            eig1_real*eig2_real < 0.0])
+        
+        # 3D O point (repelling; trace > 0, determinant > 0, conjugate eigenvalues equal)
+        classification_array[1,...] = np.logical_and.reduce([is_3D, 
+                                                            is_imag_eig, 
+                                                            trace_M > 0.0])
+        
+        # 3D O point (attracting; trace < 0, determinant > 0, conjugate eigenvalues equal)
+        classification_array[2,...] = np.logical_and.reduce([is_3D, 
+                                                            is_imag_eig, 
+                                                            trace_M < 0.0])
+        
+        # 3D repelling (trace =/= 0, determinant <= 0, real eigenvalues greater than 0)
+        classification_array[3,...] = np.logical_and.reduce([is_3D, 
+                                                            is_real_eig, 
+                                                            eig1_real > 0.0, 
+                                                            eig2_real > 0.0])
+                                                
+        # 3D attracting (trace =/= 0, determinant <= 0, real eigenvalues less than 0)
+        classification_array[4,...] = np.logical_and.reduce([is_3D, 
+                                                            is_real_eig, 
+                                                            eig1_real < 0.0, 
+                                                            eig2_real < 0.0])
+        
+        # 3D antiparallel (trace =/= 0, determinant < 0, either real component of eigenvalues = 0)
+        classification_array[5,...] = np.logical_and.reduce([is_3D, 
+                                                            is_parallel])
+        
+        # 2D X point (trace = 0, determinant < 0, real component of eigenvalues equal in opposite sign)
+        classification_array[6,...] = np.logical_and.reduce([is_2D, 
+                                                            is_real_eig])
+        
+        # 2D O point (trace = 0, determinant > 0, imaginary component of eigenvalues equal in opposite sign)
+        classification_array[7,...] = np.logical_and.reduce([is_2D, 
+                                                            is_imag_eig])
+        
+        # 2D antiparallel (trace = 0, determinant = 0, all eigenvalues = 0)
+        classification_array[8,...] = np.logical_and.reduce([is_2D, 
+                                                            is_parallel])
+        return classification_array
         
     def vector_potential(
         self,
         vector_field: np.ndarray,
         debug: bool = False,
-        field_name: str = "vector_field") -> tuple:
+        field_name: str = "vector potential") -> tuple:
         """
         Calculate the vector potential of a vector field in both 2D and 3D.
         Now with optional debug mode that uses the Derivative class for verification.
         
-        In 3D: Computes A such that B = ∇ × A (Coulomb gauge: ∇·A = 0)
-        In 2D: Computes stream function ψ such that F = ∇ × ψẑ
+        In 3D: Computes A such that B = ∇ x A (Coulomb gauge: ∇·A = 0)
+        In 2D: Computes stream function ψ such that F = ∇ x ψẑ
         
         Author:
             James Beattie (2024)
@@ -960,50 +992,48 @@ class DerivedVars(ScalarOperations,
                 psi (np.ndarray): The stream function of shape (nx, ny).
                 F_recon (np.ndarray, optional): The reconstructed vector field if debug is True.
         """
-        
         # Ensure data is float32 for memory efficiency
-        vector_field = ensure_float32(vector_field, field_name=field_name)
+        vector_field = ensure_float32(
+            vector_field, 
+            field_name=field_name)
         
         if self.num_of_dims == 3:
-            nx, ny, nz = vector_field.shape[1:]
+            nx, ny, nz = vector_field.shape[X_GRID_VEC:]
             # 3D case
             # Create wave vectors
-            kx = 2 * np.pi * fftfreq(nx, d=self.L[0]/nx)
-            ky = 2 * np.pi * fftfreq(ny, d=self.L[1]/ny)
-            kz = 2 * np.pi * fftfreq(nz, d=self.L[2]/nz)
-            
+            kx = 2 * np.pi * fftfreq(nx, d=self.L[X]/nx)
+            ky = 2 * np.pi * fftfreq(ny, d=self.L[Y]/ny)
+            kz = 2 * np.pi * fftfreq(nz, d=self.L[Z]/nz)
             # Create meshgrid
-            kx_grid, ky_grid, kz_grid = np.meshgrid(kx, ky, kz, indexing='ij')
-            k = np.array([kx_grid, ky_grid, kz_grid], dtype=np.float32)
-            
+            kx_grid, ky_grid, kz_grid = np.meshgrid(kx, ky, kz,
+                                                    indexing='ij')
+            k = np.array([kx_grid, ky_grid, kz_grid],
+                         dtype=np.float32)
             # FFT of vector field
             field_fft = self._do_fft(
                 vector_field,
-                axes=(1, 2, 3),
+                axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC),
                 forward=True,
-                real=np.isrealobj(vector_field),
+                real=False,#np.isrealobj(vector_field),
                 norm='forward'
             )
-            
             # Compute vector potential in Fourier space using JIT function
             a_hat = compute_vector_potential_3D_core(
                 k, 
                 field_fft, 
-                kx_grid, 
-                ky_grid, 
-                kz_grid
+                kx_grid.astype(np.float32), 
+                ky_grid.astype(np.float32), 
+                kz_grid.astype(np.float32)
             )
-            
             # Inverse FFT to get vector potential in real space
             a = self._do_fft(
                 a_hat,
-                axes=(1, 2, 3),
+                axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC),
                 forward=False,
-                real=False,
+                real=False,#np.isrealobj(vector_field),
                 norm='forward'
             )
             a = np.real(a).astype(np.float32)
-            
             if debug:
                 # Reconstruct the vector field using the optimized curl function
                 b_recon = self.vector_curl(a)
@@ -1025,7 +1055,7 @@ class DerivedVars(ScalarOperations,
             # FFT of vector field
             field_fft = self._do_fft(
                 vector_field,
-                axes=(1, 2),
+                axes=(X_GRID_VEC, Y_GRID_VEC),
                 forward=True,
                 real=np.isrealobj(vector_field),
                 norm='forward'
@@ -1039,7 +1069,7 @@ class DerivedVars(ScalarOperations,
             # Inverse FFT to get stream function in real space
             psi = self._do_fft(
                 psi_hat,
-                axes=(0, 1),
+                axes=(X_GRID_VEC, Y_GRID_VEC),
                 forward=False,
                 real=False,
                 norm='forward'

@@ -1,6 +1,11 @@
 import numpy as np
 import multiprocessing
 
+
+##################################################################
+# FFT configuration
+##################################################################
+
 pyfftw_import = False
 try: 
     import pyfftw
@@ -19,7 +24,13 @@ else:
     fftfreq = np.fft.fftfreq
     
     
-def ensure_float32(field, field_name="field"):
+##################################################################
+# Utility functions    
+##################################################################
+    
+def ensure_float32(
+    field, 
+    field_name="field"):
     """Utility to convert arrays to float32 with consistent messaging."""
     if field.dtype != np.float32:
         print(f"Converting {field.dtype} {field_name} to float32 for memory efficiency")
