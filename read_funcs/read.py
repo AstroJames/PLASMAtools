@@ -10,9 +10,9 @@ from ..funcs.derived_vars import DerivedVars as DV
 ## Auxillary reading functions (can be jit compiled)
 ## ###############################################################
 
-from .read_FLASH        import  reformat_FLASH_field, unsort_FLASH_field
-from .read_BHAC_faster  import  reformat_BHAC_field
-from .read_RAMSES       import  reformat_RAMSES_field
+from .read_FLASH    import  reformat_FLASH_field, unsort_FLASH_field
+from .read_BHAC     import  reformat_BHAC_field
+from .read_RAMSES   import  reformat_RAMSES_field
 
 ## ###############################################################
 ## Global variabes
@@ -34,7 +34,7 @@ field_lookup_type = {
     "jxb"       : "vector", # Lorentz force
     "jxb_mag"   : "scalar", # mag of Lorentz force
     "jdotb"     : "scalar", # current helicity
-    "pres"      : "scalar"
+    "pres"      : "scalar"  # thermal pressure
 }
 
 bhac_lookup_dict = {"vel"  : ["u1", "u2", "u3"],
@@ -290,12 +290,15 @@ class Fields():
                 if interpolate:
                     if len(var_list) == 1:
                         # Single variable
-                        setattr(self, field_str, d.interpolate_uniform_grid_numba(
+                        setattr(self, field_str, d.interpolate_uniform_grid(
                             var_name=var_list[0], n_grid_x=N_grid_x, n_grid_y=N_grid_y))
                     else:
                         # Multiple scalar variables - batch them
-                        grids = d.interpolate_multiple_vars_numba(
-                            var_names=var_list, n_grid_x=N_grid_x, n_grid_y=N_grid_y)
+                        grids = d.interpolate_multiple_vars(
+                            var_names=var_list, 
+                            n_grid_x=N_grid_x, 
+                            n_grid_y=N_grid_y)
+                        #TODO: fix the setting of attributes based on the FLASH data structure
                         for i, var in enumerate(var_list):
                             setattr(self, f"{field_str}_{i}" if len(var_list) > 1 else field_str, grids[var])
             
@@ -304,19 +307,15 @@ class Fields():
                 var_list = bhac_lookup_dict[field_str]
                 if interpolate and len(var_list) > 1:
                     # Batch interpolate all vector components at once
-                    grids = d.interpolate_multiple_vars_numba(
+                     # Pre-allocate with correct shape
+                    field = np.empty((3,) + (N_grid_x,N_grid_x), dtype=np.float32)
+                    grid = d.interpolate_multiple_vars(
                         var_names=var_list, n_grid_x=N_grid_x, n_grid_y=N_grid_y)
-                    
-                    # Assign to x, y coordinates
+                    # # Assign to x, y coordinates
                     coords = ["x", "y", "z"][:len(var_list)]  # Handle 2D or 3D vectors
                     for var, coord in zip(var_list, coords):
-                        setattr(self, field_str + coord, grids[var])
-                else:
-                    # Fallback to original method if needed
-                    for var, coord in zip(var_list, ["x","y"]):
-                        if interpolate:
-                            setattr(self, field_str + coord, d.interpolate_uniform_grid_numba(
-                                var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
+                        field[coords.index(coord)] = grid[var]
+                    setattr(self, field_str, field)
             del d
 
     def _read_scalar_field(
