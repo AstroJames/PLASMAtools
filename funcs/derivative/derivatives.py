@@ -1,284 +1,253 @@
+"""
+
+PLASMAtools: Numba-optimized derivatives for vector fields
+
+This module provides Numba-optimized functions for computing derivatives of vector fields,
+including gradient, curl, and divergence operations. It supports both 1D, 2D, and 3D vector fields with various boundary conditions.
+
+This code is designed to be used with the Numba library for high-performance numerical computing in Python.
+
+Author: James R. Beattie
+
+"""
+
 import numpy as np
+from .core_functions import *
+from typing import Union
 
-# shifts for derivatives
-F = -1  # shift forwards
-B = +1  # shift backwards
-
-################################################################
-## Derivative class
-################################################################
 
 class Derivative:
     """
-    Derivative class.
-    
-    This class provides methods for computing the first and second
-    derivatives of a scalar field using finite differences.
-    
-    Author: James Beattie
-    
+    Derivative class using Numba for periodic finite-difference.
+    Now with fused operations for curl and divergence.
     """
-    
-    def __init__(self, 
-                 stencil : int = 2) -> None:
-        """
-        Initialize the derivative class.
-
-        Author: James Beattie
-
-        Args:
-            order (int, optional) : the size of the stencil. Defaults to 2 point.
-            L (float, optional)   : the size of the domain. Defaults to 1.0.
-        """
+    def __init__(
+        self, 
+        stencil: int = 2) -> None:
         
-        # Stencil order
-        if stencil not in [2, 4, 6, 8]:
-            raise ValueError("Invalid stencil order")
+        # Validate stencil order
+        if stencil not in (2, 4, 6, 8):
+            raise ValueError("Invalid stencil order: choose 2,4,6, or 8")
         self.stencil = stencil
         
         
-    def apply_boundary_conditions(self, 
-                                  scalar_field          : np.ndarray,
-                                  boundary_condition    : str,
-                                  gradient_dir          : int) -> np.ndarray:
+        # first-derivative offsets & coeffs
+        if stencil == 2:
+            self.offsets1 = np.array([-1, +1],
+                                     dtype=np.int32)
+            self.coeffs1  = np.array([ -0.5, +0.5],
+                                     dtype=np.float32)
+            self.offsets2 = np.array([-1, 0, +1],
+                                     dtype=np.int32)
+            self.coeffs2  = np.array([1.0, -2.0, 1.0],
+                                     dtype=np.float64)
+        elif stencil == 4:
+            self.offsets1 = np.array([-2, -1, +1, +2],
+                                     dtype=np.int32)
+            self.coeffs1  = np.array([+1/12, -8/12, +8/12, -1/12],
+                                     dtype=np.float32)
+            self.offsets2 = np.array([-2, -1, 0, +1, +2],
+                                     dtype=np.int32)
+            self.coeffs2  = np.array([-1, 16, -30, 16, -1],
+                                     dtype=np.float32)/12.0
+        elif stencil == 6:
+            self.offsets1 = np.array([-3,-2,-1,+1,+2,+3],
+                                     dtype=np.int32)
+            self.coeffs1  = np.array([-1/60, +9/60, -45/60, +45/60, -9/60, +1/60],
+                                     dtype=np.float32)
+            self.offsets2 = np.array([-3,-2,-1,0,+1,+2,+3],
+                                     dtype=np.int32)
+            self.coeffs2  = np.array([-2, +27, -270, +490, -270, +27, -2],
+                                     dtype=np.float32)/180.0
+        else:  # stencil==8
+            self.offsets1 = np.array([-4,-3,-2,-1,+1,+2,+3,+4],
+                                     dtype=np.int32)
+            self.coeffs1 = np.array([+1/280,-4/105,+1/5,-4/5,+4/5,-1/5,+4/105,-1/280],
+                                    dtype=np.float32)
+            self.offsets2 = np.array([-4,-3,-2,-1,0,+1,+2,+3,+4],
+                                     dtype=np.int32)
+            self.coeffs2  = np.array([-9, +128, -1008, +8064, -14350, +8064, -1008, +128, -9],
+                                     dtype=np.float32)/5040.0
+
+
+    def gradient(
+        self,
+        scalar_field       : np.ndarray,
+        gradient_dir       : int,
+        L                  : float = 1.0,
+        derivative_order   : int = 1,
+        boundary_condition : str = "periodic") -> np.ndarray:
         """
-        NOTE: This function is not complete. Currently only works for periodic boundary conditions.
-        
-        
-        Apply boundary conditions to the scalar field.
+        Compute the 1st or 2nd derivative along one axis using Numba.
+        """
+        # map BC string to code for Numba
+        if boundary_condition == 'periodic':
+            bc_code = 0
+        elif boundary_condition == 'dirichlet':
+            bc_code = 1
+        else: # neumann
+            bc_code = 2
+            
+        if gradient_dir < 0 or gradient_dir >= scalar_field.ndim:
+            raise ValueError("Invalid gradient_dir")
+        scalar_field_shape = scalar_field.shape
+        dr = self.compute_dr(L, scalar_field_shape, gradient_dir)
+        # choose offsets/coeffs
+        if derivative_order == 1:
+            offsets, coeffs = self.offsets1, self.coeffs1
+        else:
+            offsets, coeffs = self.offsets2, self.coeffs2
+        # allocate output
+        out = np.empty_like(scalar_field)
+        # dispatch by dimension
+        if scalar_field.ndim == 1:
+            return gradient_axis_numba_1d(
+                scalar_field, 
+                dr if derivative_order==1 else dr*dr,
+                offsets, 
+                coeffs, 
+                bc_code, 
+                out)
+        elif scalar_field.ndim == 2:
+            return gradient_axis_numba_2d(
+                scalar_field, 
+                gradient_dir,
+                dr if derivative_order==1 else dr*dr,
+                offsets, 
+                coeffs, 
+                bc_code, 
+                out)
+        elif scalar_field.ndim == 3:
+            return gradient_axis_numba_3d(
+                scalar_field, 
+                gradient_dir,
+                dr if derivative_order==1 else dr*dr,
+                offsets, 
+                coeffs, 
+                bc_code, 
+                out)
+        else:
+            raise NotImplementedError("gradient only implemented for ndim<=3")
 
-        Author: James Beattie
 
+    def gradient_tensor_fast(
+        self, 
+        f3: np.ndarray, 
+        L: float) -> np.ndarray:
+        """
+        Compute the full 3x3 gradient tensor in a single fused Numba call.
+        """
+        offsets, coeffs = self.offsets1, self.coeffs1
+        dr = self.compute_dr(
+            L, 
+            f3.shape, 
+            1)
+        N = f3.shape[X_GRID_VEC]
+        out = np.empty((
+            f3.shape[N_COORDS_VEC], 
+            f3.shape[N_COORDS_VEC], N, N, N), 
+                       dtype=f3.dtype)
+        return gradient_tensor_fused(
+            f3, 
+            offsets, 
+            coeffs, 
+            dr, 
+            out)
+
+
+    def vector_curl_fast(
+        self, 
+        vector_field: np.ndarray,
+        L: Union[float, np.ndarray],
+        boundary_condition: str = "periodic") -> np.ndarray:
+        """
+        Compute curl of a 3D vector field using a single fused kernel.
+        
         Args:
-            scalar_field (np.ndarray): the scalar field to which boundary conditions are applied.
-            boundary_condition (str): the type of boundary condition ('periodic', 'dirichlet', 'neumann').
-            gradient_dir (int):        the direction of the gradient.
-
-        Returns:
-            np.ndarray: the scalar field with boundary conditions applied.
-        """
-                
-        self.num_of_gcs = self.stencil // 2
-        pad_width = [(0, 0)] * scalar_field.ndim
-        pad_width[gradient_dir] = (self.num_of_gcs, self.num_of_gcs)
-
-        # For Dirichlet boundary conditions, set the boundary values to zero
-        if boundary_condition == 'dirichlet':
-            Warning("Dirichlet boundary conditions not implemented yet")
-            scalar_field = np.pad(scalar_field, 
-                                  pad_width, 
-                                  mode='constant', 
-                                  constant_values=0)
-
-        # For Neumann boundary conditions, replicate the edge values, 
-        # setting derivative to zero
-        if boundary_condition == 'neumann' or boundary_condition == "periodic":
-            if boundary_condition == 'neumann':
-                Warning("Neumann boundary conditions not implemented yet")
-            scalar_field = np.pad(scalar_field, 
-                                  pad_width, 
-                                  mode='edge')
-
-        return scalar_field
-    
-    
-    def remove_ghost_cells(self, 
-                           scalar_field         : np.ndarray,
-                           gradient_dir         : int) -> np.ndarray:
-        """
-        Remove ghost cells from the scalar field.
-
-        Author: James Beattie
-
-        Args:
-            scalar_field (np.ndarray): the scalar field with ghost cells.
-            gradient_dir (int):        the direction of the gradient.
-
-        Returns:
-            np.ndarray: the scalar field with ghost cells removed.
-        """
-        
-        slices                   = [slice(None)] * scalar_field.ndim
-        slices[gradient_dir]     = slice(self.num_of_gcs, -self.num_of_gcs)
-        constant                 = 2.0
-        scalar_field             = scalar_field[tuple(slices)]
-
-        # Multiply the first slice along the specified axis
-        slc_first = [slice(None)] * scalar_field.ndim  # Create a full slice for all dimensions
-        slc_first[gradient_dir] = 0  # Set the slice for the first element along the axis
-        scalar_field[tuple(slc_first)] *= constant
-        
-        # Multiply the last slice along the specified axis
-        slc_last = [slice(None)] * scalar_field.ndim  # Create a full slice for all dimensions
-        slc_last[gradient_dir] = -1  # Set the slice for the last element along the axis
-        scalar_field[tuple(slc_last)] *= constant
-        
-        return scalar_field
-    
-    
-    def compute_dr(self, 
-                   L            : float,
-                   shape        : np.ndarray,
-                   gradient_dir : int) -> float:
-        """
-        Compute the grid spacing `dr`.
-        
-        Author: James Beattie
-        
-        Args:
-            shape (tuple): the shape of the scalar field.
-            gradient_dir (int): the direction of the gradient.
+            vector_field: shape (3, Nx, Ny, Nz)
+            L: domain size (scalar for cubic, or array [Lx, Ly, Lz])
+            boundary_condition: "periodic" or "neumann"
             
         Returns:
-            float: the grid spacing `dr`.
+            curl: shape (3, Nx, Ny, Nz)
         """
+        if vector_field.shape[N_COORDS_VEC] != 3:
+            raise ValueError("vector_field must have shape (3, ...)")
         
-        return L / (shape[gradient_dir] - 1)
+        # Handle domain size
+        if isinstance(L, (int, float)):
+            Lx = Ly = Lz = float(L)
+        else:
+            Lx, Ly, Lz = L[X], L[Y], L[Z]
+        
+        # Compute grid spacings
+        dx = self.compute_dr(Lx,vector_field.shape[X_GRID_VEC:],X)
+        dy = self.compute_dr(Ly,vector_field.shape[X_GRID_VEC:],Y)
+        dz = self.compute_dr(Lz,vector_field.shape[X_GRID_VEC:],Z)
+        
+        # BC code
+        bc_code = 0 if boundary_condition == "periodic" else 2
+        
+        # Allocate output
+        out = np.empty_like(vector_field)
+                
+        # Call fused kernel
+        return vector_curl_fused_3d(
+            vector_field, 
+            self.offsets1, 
+            self.coeffs1,
+            dx, dy, dz, bc_code, out)
 
 
-    def gradient(self,
-                 scalar_field       : np.ndarray,
-                 gradient_dir       : int,
-                 L                  : float = 1.0,
-                 derivative_order   : int = 1,
-                 boundary_condition : str = "periodic") -> np.ndarray:
+    def vector_divergence_fast(
+        self,
+        vector_field: np.ndarray,
+        L: Union[float, np.ndarray],
+        boundary_condition: str = "periodic") -> np.ndarray:
         """
-        Compute the first derivative of a scalar field in one direction
-        using finite differences.
-        
-        Author: James Beattie & Neco Kriel
+        Compute divergence of a 3D vector field using a single fused kernel.
         
         Args:
-            scalar_field (np.ndarray)           : the scalar field to compute the gradient of.
-            gradient_dir (int)                  : the direction of the gradient.
-            derivative_order (int, optional)    : the order of the derivative. Defaults to 1.
-                                                    (1 for first derivative, 2 for second derivative)
-            boundary_condition (str, optional)  : the type of boundary condition 
-                                                    ('periodic', 'dirichlet', 'neumann'). D
-                                                    efaults to 'periodic'.
-
+            vector_field: shape (3, Nx, Ny, Nz)
+            L: domain size (scalar for cubic, or array [Lx, Ly, Lz])
+            boundary_condition: "periodic" or "neumann"
+            
         Returns:
-            np.ndarray: the gradient of the scalar field in the specified direction.
-        
+            divergence: shape (Nx, Ny, Nz)
         """
+        if vector_field.shape[N_COORDS_VEC] != 3:
+            raise ValueError("vector_field must have shape (3, ...)")
         
-        # Check for valid boundary conditions
-        if boundary_condition not in ['periodic', 'dirichlet', 'neumann']:
-            raise ValueError("Invalid boundary condition")
-        # Check for valid gradient direction
-        if gradient_dir < 0 or gradient_dir >= scalar_field.ndim:
-            raise ValueError("Invalid gradient direction")
-        # Check for valid derivative order
-        if derivative_order not in [1, 2]:
-            raise ValueError("Invalid derivative order")
+        # Handle domain size
+        if isinstance(L, (int, float)):
+            Lx = Ly = Lz = float(L)
+        else:
+            Lx, Ly, Lz = L[X], L[Y], L[Z]
         
-        # Get the shape of the scalar field
-        scalar_field_shape = scalar_field.shape
+        # Compute grid spacings
+        dx = self.compute_dr(Lx,vector_field.shape[X_GRID_VEC:],X)
+        dy = self.compute_dr(Ly,vector_field.shape[X_GRID_VEC:],Y)
+        dz = self.compute_dr(Lz,vector_field.shape[X_GRID_VEC:],Z)
         
-        # Apply boundary conditions
-        scalar_field = self.apply_boundary_conditions(scalar_field, 
-                                                      boundary_condition, 
-                                                      gradient_dir)
+        # BC code
+        bc_code = 0 if boundary_condition == "periodic" else 2
         
-        # Compute the grid spacing `dr`
-        dr = self.compute_dr(L,
-                             scalar_field_shape,
-                             gradient_dir)
-        
-        # Compute the first order derivative
-        if derivative_order == 1:
-            # two point stencil
-            if self.stencil == 2:
-                # df/dr = (f(r+dr) - f(r-dr))/2dr
-                # and remove the ghost cells in 3D and return the gradient
-                return self.remove_ghost_cells(( 
-                          (1./2.) * np.roll(scalar_field, F, axis=gradient_dir) \
-                        - (1./2.) * np.roll(scalar_field, B, axis=gradient_dir)) / dr, 
-                        gradient_dir)
-            # four point stencil
-            elif self.stencil == 4:
-                # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
-                # and remove the ghost cells in 3D and return the gradient
-                return self.remove_ghost_cells(( 
-                        - (1./12.) * np.roll(scalar_field, 2*F, axis=gradient_dir) \
-                        + (2./3.)  * np.roll(scalar_field, F, axis=gradient_dir)   \
-                        - (2./3.)  * np.roll(scalar_field, B, axis=gradient_dir)   \
-                        + (1./12.) * np.roll(scalar_field, 2*B, axis=gradient_dir)) / dr, 
-                        gradient_dir)
-            # six point stencil
-            elif self.stencil == 6:
-                # df/dr = (-f(r+3dr) + 9f(r+2dr) - 45f(r+dr) + 45f(r-dr) - 9f(r-2dr) + f(r-3dr))/60dr
-                # and remove the ghost cells in 3D and return the gradient
-                return self.remove_ghost_cells(( 
-                        - (1./60.) * np.roll(scalar_field, 3*B, axis=gradient_dir) \
-                        + (3./20.) * np.roll(scalar_field, 2*B, axis=gradient_dir) \
-                        - (3./4.)  * np.roll(scalar_field, B, axis=gradient_dir)   \
-                        + (3./4.)  * np.roll(scalar_field, F, axis=gradient_dir)   \
-                        - (3./20.) * np.roll(scalar_field, 2*F, axis=gradient_dir) \
-                        + (1./60.) * np.roll(scalar_field, 3*F, axis=gradient_dir)) / dr, 
-                        gradient_dir)
-            # eight point stencil
-            elif self.stencil == 8:
-                # df/dr = (-f(r+4dr) + 12f(r+3dr) - 66f(r+2dr) + 192f(r+dr) - 192f(r-dr) + 
-                # 66f(r-2dr) - 12f(r-3dr) + f(r-4dr))/280dr
-                # and remove the ghost cells in 3D and return the gradient
-                return self.remove_ghost_cells((
-                            - (1./280.) * np.roll(scalar_field, 4*F, axis=gradient_dir) \
-                            + (4./105.) * np.roll(scalar_field, 3*F, axis=gradient_dir) \
-                            - (1./5.)   * np.roll(scalar_field, 2*F, axis=gradient_dir) \
-                            + (4./5.)   * np.roll(scalar_field, F, axis=gradient_dir)   \
-                            - (4./5.)   * np.roll(scalar_field, B, axis=gradient_dir)   \
-                            + (1./5.)   * np.roll(scalar_field, 2*B, axis=gradient_dir) \
-                            - (4./105.) * np.roll(scalar_field, 3*B, axis=gradient_dir) \
-                            + (1./280.) * np.roll(scalar_field, 4*B, axis=gradient_dir)) / dr, 
-                            gradient_dir)
+        # Allocate output
+        out = np.empty(
+            vector_field.shape[X_GRID_VEC:],
+            dtype=vector_field.dtype)
+                
+        # Call fused kernel
+        return vector_divergence_fused_3d(
+            vector_field, 
+            self.offsets1, 
+            self.coeffs1,
+            dx, dy, dz, bc_code, out)
 
-        if derivative_order ==2:
-            Warning("Second derivative not tested thoroughly yet")
-            # two point stencil
-            # d^2 f / dr^2 = (f(r+dr) - 2f(r) + f(r-dr))/dr^2
-            if self.stencil == 2:
-                return self.remove_ghost_cells((
-                    np.roll(scalar_field,   F, axis=gradient_dir) 
-                    - 2 * scalar_field 
-                    + np.roll(scalar_field, B, axis=gradient_dir)) / dr**2, 
-                    gradient_dir)
-            # four point stencil
-            # d^2 f / dr^2 = (-f(r+4dr) + 16f(r+3dr) - 30f(r+2dr) + 16f(r+dr) - 30f(r) + 
-            # 16f(r-dr) - 30f(r-2dr) + 16f(r-3dr) - f(r-4dr))/12dr^2
-            elif self.stencil == 4:
-                return self.remove_ghost_cells((
-                    - np.roll(scalar_field,    2*F, axis=gradient_dir)
-                    + 16 * np.roll(scalar_field, F, axis=gradient_dir)
-                    - 30 * scalar_field
-                    + 16 * np.roll(scalar_field, B, axis=gradient_dir)
-                    - np.roll(scalar_field,    2*B, axis=gradient_dir)) / (12. * dr**2), 
-                    gradient_dir)
-            # six point stencil
-            # d^2 f / dr^2 = (-2f(r+3dr) + 27f(r+2dr) - 270f(r+dr) + 490f(r) 
-            # - 270f(r-dr) + 27f(r-2dr) - 2f(r-3dr))/180dr^2
-            elif self.stencil == 6:
-                return self.remove_ghost_cells((
-                    2 * np.roll(scalar_field, 3*F,  axis=gradient_dir)
-                - 27 * np.roll(scalar_field,  2*F,  axis=gradient_dir)
-                + 270 * np.roll(scalar_field,   F,  axis=gradient_dir)
-                - 490 * scalar_field
-                + 270 * np.roll(scalar_field,   B,  axis=gradient_dir)
-                - 27 * np.roll(scalar_field,  2*B,  axis=gradient_dir)
-                + 2 * np.roll(scalar_field,   3*B,  axis=gradient_dir)) / (180. * dr**2),
-                gradient_dir) 
-            # eight point stencil
-            # d^2 f / dr^2 = (-9f(r+4dr) + 128f(r+3dr) - 1008f(r+2dr) + 8064f(r+dr) - 14350f(r)
-            # + 8064f(r-dr) - 1008f(r-2dr) + 128f(r-3dr) - 9f(r-4dr))/5040dr^2
-            elif self.stencil == 8:
-                return self.remove_ghost_cells((
-                    - 9 * np.roll(scalar_field,     4*F, axis=gradient_dir)
-                    + 128 * np.roll(scalar_field,   3*F, axis=gradient_dir)
-                    - 1008 * np.roll(scalar_field,  2*F, axis=gradient_dir)
-                    + 8064 * np.roll(scalar_field,    F, axis=gradient_dir)
-                    - 14350 * scalar_field
-                    + 8064 * np.roll(scalar_field,    B, axis=gradient_dir)
-                    - 1008 * np.roll(scalar_field,  2*B, axis=gradient_dir)
-                    + 128 * np.roll(scalar_field,   3*B, axis=gradient_dir)
-                    - 9 * np.roll(scalar_field,     4*B, axis=gradient_dir)) / (5040. * dr**2),
-                    gradient_dir)
+
+    def compute_dr(
+        self, 
+        L: float,
+        shape: tuple,
+        gradient_dir: int) -> float:
+        return np.float32(L / shape[gradient_dir])
