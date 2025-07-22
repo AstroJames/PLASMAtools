@@ -1,13 +1,16 @@
 
 import numpy as np
 from numba import njit, prange
+from .constants import *
 from ..tensor import TensorOperations
 from ..vector import VectorOperations
 from ..scalar import ScalarOperations
 from ..spectral import SpectralOperations
 
 
-@njit(parallel=True, fastmath=True, cache=True)
+@njit([sig_vector_potential_2D_f32, sig_vector_potential_2D_f64, 
+       sig_vector_potential_2D_mixed_32, sig_vector_potential_2D_mixed_64],
+      parallel=True, fastmath=True, cache=True)
 def compute_vector_potential_2D_core(
     k: np.ndarray,
     field_fft: np.ndarray,
@@ -34,7 +37,7 @@ def compute_vector_potential_2D_core(
             
             if k_norm_sq > 0:
                 # Cross product k × F (z-component)
-                cross_z = k[0, x, y] * field_fft[1, x, y] - k[1, x, y] * field_fft[0, x, y]
+                cross_z = k[X, x, y] * field_fft[Y, x, y] - k[Y, x, y] * field_fft[X, x, y]
                 # Stream function: ψ = i(k × F)_z / |k|²
                 psi_hat[x, y] = 1j * cross_z / k_norm_sq
             else:
@@ -43,7 +46,9 @@ def compute_vector_potential_2D_core(
     return psi_hat
 
 
-@njit(parallel=True, fastmath=True, cache=True)
+@njit([sig_vector_potential_3D_f32, sig_vector_potential_3D_f64,
+       sig_vector_potential_3D_mixed_32, sig_vector_potential_3D_mixed_64],
+      parallel=True, fastmath=True, cache=True)
 def compute_vector_potential_3D_core(
     k: np.ndarray,
     field_fft: np.ndarray,
@@ -62,8 +67,9 @@ def compute_vector_potential_3D_core(
     
     Returns:
         Vector potential in Fourier space (3, nx, ny, nz)
+        using the formula A = i(k x F) / |k|² for Coulomb gauge.
     """
-    nx, ny, nz = field_fft.shape[1:]
+    nx, ny, nz = field_fft.shape[X_GRID_VEC:]
     a_hat = np.zeros((3, nx, ny, nz), dtype=field_fft.dtype)
     
     for x in prange(nx):
@@ -73,13 +79,13 @@ def compute_vector_potential_3D_core(
                 
                 if k_norm_sq > 0:
                     # Get k and field components
-                    k_x = k[0, x, y, z]
-                    k_y = k[1, x, y, z]
-                    k_z = k[2, x, y, z]
+                    k_x = k[X, x, y, z]
+                    k_y = k[Y, x, y, z]
+                    k_z = k[Z, x, y, z]
                     
-                    f_x = field_fft[0, x, y, z]
-                    f_y = field_fft[1, x, y, z]
-                    f_z = field_fft[2, x, y, z]
+                    f_x = field_fft[X, x, y, z]
+                    f_y = field_fft[Y, x, y, z]
+                    f_z = field_fft[Z, x, y, z]
                     
                     # Cross product k × F
                     cross_x = k_y * f_z - k_z * f_y
@@ -87,18 +93,20 @@ def compute_vector_potential_3D_core(
                     cross_z = k_x * f_y - k_y * f_x
                     
                     # Vector potential: A = i(k × F) / |k|²
-                    a_hat[0, x, y, z] = 1j * cross_x / k_norm_sq
-                    a_hat[1, x, y, z] = 1j * cross_y / k_norm_sq
-                    a_hat[2, x, y, z] = 1j * cross_z / k_norm_sq
+                    a_hat[X, x, y, z] = 1j * cross_x / k_norm_sq
+                    a_hat[Y, x, y, z] = 1j * cross_y / k_norm_sq
+                    a_hat[Z, x, y, z] = 1j * cross_z / k_norm_sq
                 else:
-                    a_hat[0, x, y, z] = 0.0 + 0.0j
-                    a_hat[1, x, y, z] = 0.0 + 0.0j
-                    a_hat[2, x, y, z] = 0.0 + 0.0j
+                    a_hat[X, x, y, z] = 0.0 + 0.0j
+                    a_hat[Y, x, y, z] = 0.0 + 0.0j
+                    a_hat[Z, x, y, z] = 0.0 + 0.0j
     
     return a_hat
 
 
-@njit(parallel=True, fastmath=True, cache=True)
+@njit([sig_reconstruct_2D_f32, sig_reconstruct_2D_f64,
+       sig_reconstruct_2D_complex_f32, sig_reconstruct_2D_complex_f64],
+      parallel=True, fastmath=True, cache=True)
 def reconstruct_field_from_stream_2D_core(
     psi: np.ndarray,
     dx: float,
@@ -122,29 +130,29 @@ def reconstruct_field_from_stream_2D_core(
     for x in prange(1, nx-1):
         for y in range(1, ny-1):
             # F_x = ∂ψ/∂y
-            field[0, x, y] = (psi[x, y+1] - psi[x, y-1]) / (2.0 * dy)
+            field[X, x, y] = (psi[x, y+1] - psi[x, y-1]) / (2.0 * dy)
             # F_y = -∂ψ/∂x
-            field[1, x, y] = -(psi[x+1, y] - psi[x-1, y]) / (2.0 * dx)
+            field[Y, x, y] = -(psi[x+1, y] - psi[x-1, y]) / (2.0 * dx)
     
     # Handle boundaries with one-sided differences
     # x boundaries
     for y in range(ny):
         # Left boundary (x=0)
-        field[0, 0, y] = (psi[0, min(y+1, ny-1)] - psi[0, max(y-1, 0)]) / (2.0 * dy) if ny > 1 else 0.0
-        field[1, 0, y] = -(psi[1, y] - psi[0, y]) / dx if nx > 1 else 0.0
+        field[X, 0, y] = (psi[0, min(y+1, ny-1)] - psi[0, max(y-1, 0)]) / (2.0 * dy) if ny > 1 else 0.0
+        field[Y, 0, y] = -(psi[1, y] - psi[0, y]) / dx if nx > 1 else 0.0
         
         # Right boundary (x=nx-1)
-        field[0, nx-1, y] = (psi[nx-1, min(y+1, ny-1)] - psi[nx-1, max(y-1, 0)]) / (2.0 * dy) if ny > 1 else 0.0
-        field[1, nx-1, y] = -(psi[nx-1, y] - psi[nx-2, y]) / dx if nx > 1 else 0.0
+        field[X, nx-1, y] = (psi[nx-1, min(y+1, ny-1)] - psi[nx-1, max(y-1, 0)]) / (2.0 * dy) if ny > 1 else 0.0
+        field[Y, nx-1, y] = -(psi[nx-1, y] - psi[nx-2, y]) / dx if nx > 1 else 0.0
     
     # y boundaries
     for x in range(nx):
         # Bottom boundary (y=0)
-        field[0, x, 0] = (psi[x, 1] - psi[x, 0]) / dy if ny > 1 else 0.0
-        field[1, x, 0] = -(psi[min(x+1, nx-1), 0] - psi[max(x-1, 0), 0]) / (2.0 * dx) if nx > 1 else 0.0
+        field[X, x, 0] = (psi[x, 1] - psi[x, 0]) / dy if ny > 1 else 0.0
+        field[Y, x, 0] = -(psi[min(x+1, nx-1), 0] - psi[max(x-1, 0), 0]) / (2.0 * dx) if nx > 1 else 0.0
         
         # Top boundary (y=ny-1)
-        field[0, x, ny-1] = (psi[x, ny-1] - psi[x, ny-2]) / dy if ny > 1 else 0.0
-        field[1, x, ny-1] = -(psi[min(x+1, nx-1), ny-1] - psi[max(x-1, 0), ny-1]) / (2.0 * dx) if nx > 1 else 0.0
+        field[X, x, ny-1] = (psi[x, ny-1] - psi[x, ny-2]) / dy if ny > 1 else 0.0
+        field[Y, x, ny-1] = -(psi[min(x+1, nx-1), ny-1] - psi[max(x-1, 0), ny-1]) / (2.0 * dx) if nx > 1 else 0.0
     
     return field
