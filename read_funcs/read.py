@@ -155,30 +155,6 @@ class Particles:
                 setattr(self,attr,getattr(self,attr)[idx])
 
 
-
-# Import the optimized reformat functions
-# from .read_FLASH import reformat_FLASH_field, unsort_flash_field
-
-import numpy as np
-from h5py import File
-import time
-from typing import List, Union, Tuple
-
-# You'll need to ensure these imports work in your environment
-# from .read_FLASH import reformat_FLASH_field, unsort_flash_field
-# from .derived_var_funcs import DerivedVars as DV
-# from .read_BHAC_fast import reformat_BHAC_field
-
-# Placeholder for field lookup type - you'll need to import this
-field_lookup_type = {
-    "dens": "scalar",
-    "pres": "scalar", 
-    "temp": "scalar",
-    "vel": "vector",
-    "mag": "vector",
-    # Add more as needed
-}
-
 class Fields():
 
     def __init__(self,
