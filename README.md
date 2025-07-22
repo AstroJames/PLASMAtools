@@ -1,12 +1,12 @@
-# Python tools for reading and manipulating plasma fluid simulations
+# Parallelised Python tools for reading and manipulating plasma fluid simulations
 
-Utilises MP parallelisation, lots of vectorisation through the `numpy` library, JIT compiling for I/O through `numba`, and `joblib` for any trivial parallelisation. There are a number of FFTs the library can use, depending upon what is available. The fastest (by a factor of a few) is `pyfftw`. Currently I am working on MPI implmentations for both FFT and derivative class, which is invaluable for large mem. jobs with more than (1k^3) cells.
+Utilises MP parallelisation, lots of vectorisation through the `numpy` library, JIT (mostly AOT) compiling for I/O and almost all post-processing functions through `numba`. There are a number of FFTs the library can use, depending upon what is available. The fastest (by a factor of a few) is `pyfftw`. This works quite well up to 2k^3, but the `spectra_mpi.py` tool in the repository can be used for larger jobs. All spectral manipulations, like integrating, binning, etc., are written in `numba` and are incredibly efficient.
 
-Currently the reading of FLASH data is handled by the `read.py` code, which has classes for particles and fields, and can read `FLASH`, `RAMSES` and `BHAC` simulation data. 
+Currently the reading of FLASH data is handled by the `read.py` code, which has classes for particles and fields, and can read `FLASH`, `RAMSES` and `BHAC` simulation data. All of the tools really only have been tested thoroughly on uniform grids. For `BHAC`, where the simulation has been run in AMR, the read also does an efficient interpolation onto a uniform mesh using `numba` to linearly interpolate and `pykdtree` for constructing a KD tree for a NN search.
 
-The post-processing functions are contained within `funcs/derived_vars/operations.py`, `funcs/spectral/operations.py`, `transfer_funcs/shell_trans_funcs.py` for derived variable functions, spectral variable functions and transfer functions respectively. The derivative class is in `funcs/derivative/derivatives_numba.py`.
+The post-processing functions are contained within `funcs/derived_vars/operations.py`, `funcs/spectral/operations.py`, `transfer_funcs/shell_trans_funcs.py` for derived variable functions, spectral variable functions and transfer functions respectively. The derivative class is in `funcs/derivative/derivatives.py`.
 
-All scalar/vector operations can be used in 1D, 2D or 3D. 
+All scalar/vector operations can be used in 1D, 2D or 3D, for a variety of boundary conditions on each boundary. 
 
 At the moment, the post-processing functions can be used as stand-alone functions that are directly applied to data, but for quite a few of them (look at `read.py`) they can be called as a method for the data object, which adds new derived fields directly to the data object. 
 
@@ -65,7 +65,7 @@ The functions are:
 * decomposition into left and right helical eigen modes of a vector field
 
 ## Spectral operations:
-All FFTS multithreaded with pyfftw backend by default.
+All FFTS multithreaded with `pyfftw` backend, but fall back to `numpy` if `pyfftw` does not exist..
 * vector potential ( in Coloumb gauge )
 * scalar power spectrum
 * vector field power spectrum
@@ -92,7 +92,8 @@ All FFTS multithreaded with pyfftw backend by default.
 * 3D transfer functions for Newtonian ideal MHD equations.
 
 ## Plotting functions:
-* vectorised implementation of line integral convolution algorithm. Works very fast, even up to (10k)^2 grids.
+* vectorised implementation of line integral convolution algorithm (implemented by Neco Kriel). Works very fast, even up to (10k)^2 grids.
+* An interpolation function that allows for smoothe interpolation between different time realisations.
 
 ## Critial point analysis
 * o and x point detector based on vector potential / stream function. Only works in 2D. 
