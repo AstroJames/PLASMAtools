@@ -20,7 +20,8 @@ from .read_RAMSES       import  reformat_RAMSES_field
 
 field_lookup_type = {
     "dens"      : "scalar", # mass density
-    "dvvl"      : "scalar", # 
+    "dvvl"      : "scalar", # divergence of velocity
+    "ye"        : "scalar", # electron fraction
     "alpha"     : "scalar", # force free parameter
     "vel"       : "vector", # velocity field
     "mag"       : "vector", # magnetic field
