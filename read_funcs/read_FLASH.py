@@ -27,6 +27,7 @@ sig32_sort = types.float32[:,:,:](
     types.int32, 
     types.int32
     )
+
 sig32_usort = types.float32[:,:,:,:](
     types.float32[:,:,:], 
     types.int32, 
@@ -142,6 +143,9 @@ def unsort_FLASH_field(
     # Note: This function expects field_sorted to already be transposed to (x,y,z)
     # from the original (y,z,x) format
     
+    # Enforce single precision 
+    field_sorted = field_sorted.astype(np.float32)
+    
     # Calculate the total number of blocks
     total_blocks = iprocs * jprocs * kprocs
         
@@ -197,11 +201,15 @@ def reformat_FLASH_field(
     field_sorted - the organised 3D field in (x,y,z) coordinates
 
     """
+    
+    # Enforce single precision 
+    field = field.astype(np.float32)
 
-    out = np.zeros((nxb*iprocs,
-                   nyb*jprocs,
-                   nzb*kprocs),
-                  dtype=field.dtype)
+    out = np.zeros(
+        (nxb*iprocs,
+         nyb*jprocs,
+         nzb*kprocs),
+        dtype=field.dtype)
 
     if debug:
         print(f"reformat_FLASH_field: nxb = {nxb}")
