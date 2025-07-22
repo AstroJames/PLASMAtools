@@ -242,10 +242,10 @@ class SpectralOperations():
         # Ensure data is float32 for memory efficiency
         field1 = ensure_float32(
             field1,
-            field_name="field")
+            field_name=field_name)
         field2 = ensure_float32(
             field2,
-            field_name="field")
+            field_name=field_name)
         
         # Compute FFTs
         field1_fft = self._do_fft(
@@ -355,7 +355,7 @@ class SpectralOperations():
         # Ensure data is float32 for memory efficiency
         field = ensure_float32(
             field, 
-            field_name="field")
+            field_name=field_name)
         
         # Use JIT function for distances
         r = compute_radial_distances_2D_core(
