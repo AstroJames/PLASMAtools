@@ -304,20 +304,42 @@ class Fields():
                     debug)
                 
         elif self.sim_data_type == "bhac":
-            # BHAC reading logic remains the same
-            #TODO: fix up BHAC reader
-            d = reformat_BHAC_field(file_name=self.filename)
+            d = reformat_BHAC_field(
+                file_name=self.filename)
             
             if field_lookup_type[field_str] == "scalar":
-                for var in bhac_lookup_dict[field_str]:
-                    if interpolate:
-                        setattr(self, field_str, d.interpolate_uniform_grid(
-                            var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
+                # Single variable - use single method
+                var_list = bhac_lookup_dict[field_str]
+                if interpolate:
+                    if len(var_list) == 1:
+                        # Single variable
+                        setattr(self, field_str, d.interpolate_uniform_grid_numba(
+                            var_name=var_list[0], n_grid_x=N_grid_x, n_grid_y=N_grid_y))
+                    else:
+                        # Multiple scalar variables - batch them
+                        grids = d.interpolate_multiple_vars_numba(
+                            var_names=var_list, n_grid_x=N_grid_x, n_grid_y=N_grid_y)
+                        for i, var in enumerate(var_list):
+                            setattr(self, f"{field_str}_{i}" if len(var_list) > 1 else field_str, grids[var])
+            
             elif field_lookup_type[field_str] == "vector": 
-                for var, coord in zip(bhac_lookup_dict[field_str], ["x","y"]):
-                    if interpolate:
-                        setattr(self, field_str + coord, d.interpolate_uniform_grid(
-                            var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
+                # Vector variables - batch interpolation for x,y components
+                var_list = bhac_lookup_dict[field_str]
+                if interpolate and len(var_list) > 1:
+                    # Batch interpolate all vector components at once
+                    grids = d.interpolate_multiple_vars_numba(
+                        var_names=var_list, n_grid_x=N_grid_x, n_grid_y=N_grid_y)
+                    
+                    # Assign to x, y coordinates
+                    coords = ["x", "y", "z"][:len(var_list)]  # Handle 2D or 3D vectors
+                    for var, coord in zip(var_list, coords):
+                        setattr(self, field_str + coord, grids[var])
+                else:
+                    # Fallback to original method if needed
+                    for var, coord in zip(var_list, ["x","y"]):
+                        if interpolate:
+                            setattr(self, field_str + coord, d.interpolate_uniform_grid_numba(
+                                var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
             del d
 
     def _read_scalar_field(
