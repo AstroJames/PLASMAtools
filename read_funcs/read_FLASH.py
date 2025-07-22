@@ -143,9 +143,6 @@ def unsort_FLASH_field(
     # Note: This function expects field_sorted to already be transposed to (x,y,z)
     # from the original (y,z,x) format
     
-    # Enforce single precision 
-    field_sorted = field_sorted.astype(np.float32)
-    
     # Calculate the total number of blocks
     total_blocks = iprocs * jprocs * kprocs
         
