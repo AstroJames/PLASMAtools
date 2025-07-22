@@ -4,7 +4,7 @@ Utilises MP parallelisation, lots of vectorisation through the `numpy` library, 
 
 Currently the reading of FLASH data is handled by the `read.py` code, which has classes for particles and fields, and can read `FLASH`, `RAMSES` and `BHAC` simulation data. 
 
-The post-processing functions are contained within `aux_funcs/derived_var_funcs.py`, `aux_funcs/spectral_var_funcs.py`, `aux_funcs/shell_trans_funcs.py` for derived variable functions, spectral variable functions and transfer functions respectively. The derivative class is in `derivative.py`.
+The post-processing functions are contained within `funcs/derived_vars/operations.py`, `funcs/spectral/operations.py`, `transfer_funcs/shell_trans_funcs.py` for derived variable functions, spectral variable functions and transfer functions respectively. The derivative class is in `funcs/derivative/derivatives_numba.py`.
 
 All scalar/vector operations can be used in 1D, 2D or 3D. 
 
@@ -21,17 +21,21 @@ The functions are:
 ## Derivatives:
 * a range of derivative stencils for first-order, central difference spatial derivatives, from two to eight-point with periodic, Neumann, and Dirichlet BCs.
 * limited stencils for second-order, central spatial derivatives.
-* all derivatives are vectorised, but currently working towards MPI implementation for large mem. problems.
+* all derivatives are parallelised and AOT compiled using numba
 
 ## Scalar operations:
 * scalar gradient
 * scalar laplacian
+* scalar rms
 
 ## Vector operations:
 * vector cross product
 * vector dot product
 * vector field magnitude
-* vectof field RMS
+* vector field RMS
+* vector field projection onto another vector field
+* angle between vectors
+* vector triple product
 * vector curl
 * vector divergence
 * construction of TNB basis ( Frenet-Serret coordinates of the vector field ) 
@@ -40,12 +44,18 @@ The functions are:
 * magnetic helicity ( in Coloumb gauge \partial_ia_i = 0; a . b )
 * current helicity ( j.b )
 * kinetic helicity ( vort . v )
+* \dot{Q} = <P div(v)> heating
+* vector laplacian
 
 ## Tensor operations:
 * tensor outer product
-* tensor contraction
-* vector dot tensor
+* tensor double contraction (A_ij A_ij or A_ij A_ji)
+* vector dot tensor (u_i A_ij or u_j A_ij)
+* tensor magnitude
+* tensor field transpose
+* tensor invariants 
 * gradient tensor
+* gradient tensor decomposition into trace, symmetric, antisymmetric tensors
 * eigen values of Hermitian tensors ( for, e.g., symmetric stretching tensor; used for dynamo growth rate modelling )
 
 ## Decompositions:
@@ -53,15 +63,17 @@ The functions are:
 * helmholtz decomposition (incompressible and compressible modes) of a vector field
 * vorticity decomposition (stretching, compression, baroclinicity)
 * decomposition into left and right helical eigen modes of a vector field
-* decomposition into vorticity sources ( compressive, stretching, baroclinic, tension )
 
 ## Spectral operations:
-* vector potential ( via fft in Coloumb gauge )
-* 3D vector sclar power spectrum
-* 3D vector field power spectrum
-* 3D tensor field power spectrum
-* spherical shell binning
-* cylindrical shell binning
+All FFTS multithreaded with pyfftw backend by default.
+* vector potential ( in Coloumb gauge )
+* scalar power spectrum
+* vector field power spectrum
+* tensor field power spectrum
+* vector field power spectrum using mpi
+* mixed vector field spectrum (for e.g., helicity spectrum)
+* spherical shell integration
+* cylindrical shell integration
 * k space filtering through isotropic k shells ( for transfer function analysis )
 * k space filtering through cylindrical k shells ( for transfer function analysis )
 
@@ -84,6 +96,3 @@ The functions are:
 
 ## Critial point analysis
 * o and x point detector based on vector potential / stream function. Only works in 2D. 
-
-## Functionality coming to the repo.
-* faster, mpi parallelised ffts for large mem. jobs, specifically important for transfer functions.
