@@ -11,7 +11,7 @@ from ..funcs.derived_vars import DerivedVars as DV
 ## ###############################################################
 
 from .read_FLASH        import  reformat_FLASH_field, unsort_FLASH_field
-from .read_BHAC_fast    import  reformat_BHAC_field
+from .read_BHAC_faster  import  reformat_BHAC_field
 from .read_RAMSES       import  reformat_RAMSES_field
 
 ## ###############################################################
@@ -269,6 +269,7 @@ class Fields():
              vector_magnitude   : bool = False,
              debug              : bool = False,
              interpolate        : bool = True,
+             remove_mean        : bool = False,
              N_grid_x           : int  = 256,
              N_grid_y           : int  = 256,
              N_grid_z           : int  = 256) -> None:
@@ -279,6 +280,8 @@ class Fields():
             field_str (str):            The field to read in.
             vector_magnitude (bool):    Whether to read in the magnitude of the vector field.
             debug (bool):               Whether to print debug information.
+            interpolate (bool):         Whether to interpolate onto a uniform grid.
+            remove_mean (bool):         Whether to remove the mean from the field.
             N_grid_x (int):             The number of grid points to interpolate onto in the x direction.
             N_grid_y (int):             The number of grid points to interpolate onto in the y direction.
             N_grid_z (int):             The number of grid points to interpolate onto in the z direction.
@@ -289,12 +292,20 @@ class Fields():
         if self.sim_data_type == "flash":
             # Use optimized reading based on field type
             if field_lookup_type[field_str] == "scalar":
-                self._read_scalar_field_optimized(field_str, debug)
+                self._read_scalar_field(
+                    field_str, 
+                    remove_mean,
+                    debug)
             elif field_lookup_type[field_str] == "vector":
-                self._read_vector_field_optimized(field_str, vector_magnitude, debug)
+                self._read_vector_field(
+                    field_str, 
+                    vector_magnitude, 
+                    remove_mean,
+                    debug)
                 
         elif self.sim_data_type == "bhac":
             # BHAC reading logic remains the same
+            #TODO: fix up BHAC reader
             d = reformat_BHAC_field(file_name=self.filename)
             
             if field_lookup_type[field_str] == "scalar":
@@ -309,7 +320,11 @@ class Fields():
                             var_name=var, n_grid_x=N_grid_x, n_grid_y=N_grid_y))
             del d
 
-    def _read_scalar_field_optimized(self, field_str: str, debug: bool) -> None:
+    def _read_scalar_field(
+        self, 
+        field_str: str, 
+        remove_mean: bool = False,
+        debug: bool = False) -> None:
         """Optimized scalar field reading"""
         print(f"Reading in grid attribute: {field_str}")
         
@@ -323,13 +338,27 @@ class Fields():
                     self.iprocs, self.jprocs, self.kprocs,
                     debug
                 )
+                if remove_mean:
+                    field_mean = np.mean(field_data)
+                    field_data -= field_mean
+                    print(f"Removed mean {field_mean:.6f} from {field_str}")
                 setattr(self, field_str, np.array([field_data]))
             else:
                 # Direct read without intermediate array
-                setattr(self, field_str, g[field_str][:,:,:,:][np.newaxis, ...])
+                field_data = g[field_str][:,:,:,:][np.newaxis, ...]
+                if remove_mean:
+                    field_mean = np.mean(field_data)
+                    field_data -= field_mean
+                    print(f"Removed mean {field_mean:.6f} from {field_str}")
+                setattr(self, field_str, field_data)
 
-    def _read_vector_field_optimized(self, field_str: str, vector_magnitude: bool, debug: bool) -> None:
-        """Optimized vector field reading with better memory management"""
+    def _read_vector_field(
+        self, 
+        field_str: str, 
+        vector_magnitude: bool, 
+        remove_mean: bool = False,
+        debug: bool = False) -> None:
+        """Optimized vector field reading"""
         coords = ["x", "y", "z"]
         
         with File(self.filename, 'r') as g:
@@ -339,7 +368,6 @@ class Fields():
                     field_mag = None
                     for i, coord in enumerate(coords):
                         print(f"Reading in grid attribute: {field_str}{coord}")
-                        
                         # Read and reformat component
                         component = reformat_FLASH_field(
                             g[f"{field_str}{coord}"][:,:,:,:],
@@ -347,18 +375,21 @@ class Fields():
                             self.iprocs, self.jprocs, self.kprocs,
                             debug
                         )
-                        
                         # Accumulate squared components
                         if i == 0:
                             field_mag = component**2
                         else:
                             field_mag += component**2
-                        
                         # Free memory immediately
                         del component
-                    
+                    field_mag = np.sqrt(field_mag)
+                    if remove_mean:
+                        # Note: removing mean from magnitude is unusual but supported
+                        mag_mean = np.mean(field_mag)
+                        field_mag = field_mag - mag_mean
+                        print(f"Removed mean {mag_mean:.6f} from {field_str}_mag")
                     # Set magnitude with extra dimension
-                    setattr(self, f"{field_str}_mag", np.sqrt(field_mag)[np.newaxis, ...])
+                    setattr(self, f"{field_str}_mag", field_mag[np.newaxis, ...])
                 else:
                     # Pre-allocate array for all components
                     print(f"Reading in grid attribute: {field_str}x")
@@ -368,11 +399,9 @@ class Fields():
                         self.iprocs, self.jprocs, self.kprocs,
                         debug
                     )
-                    
                     # Pre-allocate with correct shape
                     field = np.empty((3,) + first_component.shape, dtype=np.float32)
                     field[0] = first_component
-                    
                     # Read remaining components
                     for i, coord in enumerate(coords[1:], 1):
                         print(f"Reading in grid attribute: {field_str}{coord}")
@@ -382,7 +411,12 @@ class Fields():
                             self.iprocs, self.jprocs, self.kprocs,
                             debug
                         )
-                    
+                    if remove_mean:
+                        # Remove mean from each component separately
+                        for i in range(3):
+                            component_mean = np.mean(field[i])
+                            field[i] -= component_mean
+                            print(f"Removed mean {component_mean:.6f} from {field_str}{coords[i]}")
                     setattr(self, field_str, field)
             else:
                 # Non-reformatted path
@@ -393,17 +427,25 @@ class Fields():
                             field_mag = g[f"{field_str}{coord}"][:,:,:,:]**2
                         else:
                             field_mag += g[f"{field_str}{coord}"][:,:,:,:]**2
-                    
-                    setattr(self, f"{field_str}_mag", np.sqrt(field_mag))
+                    field_mag = np.sqrt(field_mag)
+                    if remove_mean:
+                        mag_mean = np.mean(field_mag)
+                        field_mag -= mag_mean
+                        print(f"Removed mean {mag_mean:.6f} from {field_str}_mag")
+                    setattr(self, f"{field_str}_mag", field_mag)
                 else:
                     # Pre-allocate for vector components
                     shape = g[f"{field_str}x"].shape
-                    field = np.empty((3,) + shape, dtype=np.float32)
-                    
+                    field = np.empty((3,) + shape, dtype=np.float32)     
                     for i, coord in enumerate(coords):
                         print(f"Reading in grid attribute: {field_str}{coord}")
                         field[i] = g[f"{field_str}{coord}"][:,:,:,:]
-                    
+                    if remove_mean:
+                        # Remove mean from each component
+                        for i in range(3):
+                            component_mean = np.mean(field[i])
+                            field[i] -=  component_mean
+                            print(f"Removed mean {component_mean:.6f} from {field_str}{coords[i]}")
                     setattr(self, field_str, field)
 
     def write(self,
