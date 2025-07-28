@@ -211,17 +211,14 @@ def tensor_outer_product_3D_nb_core(
     return out
 
 
-@njit(sig_tensor_transpose_3d, parallel=True, fastmath=True, cache=True)
-def tensor_transpose_3D_nb_core(
-    tensor_field,
-    out=None):
+@njit([sig_tensor_transpose_3d_32, sig_tensor_transpose_3d_64], parallel=True, fastmath=True, cache=True)
+def tensor_transpose_3D_nb_core(tensor_field):
     """
     Compute tensor transpose for 3D tensor field
     """
     Nx, Ny, Nz = tensor_field.shape[2], tensor_field.shape[3], tensor_field.shape[4]
     
-    if out is None:
-        out = np.empty_like(tensor_field)
+    out = np.empty_like(tensor_field)
     
     for i in prange(Nx):
         for j in range(Ny):

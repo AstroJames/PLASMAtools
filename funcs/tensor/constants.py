@@ -82,8 +82,10 @@ sig_outer_product_2d = types.float32[:,:,:,:](
     types.float32[:,:,:]
     )
 
-# Signatures for tensor transpose
-sig_tensor_transpose_3d = types.float32[:,:,:,:,:](
-    types.float32[:,:,:,:,:],
+# Signatures for tensor transpose (single input argument)
+sig_tensor_transpose_3d_32 = types.float32[:,:,:,:,:](
     types.float32[:,:,:,:,:]
+    )
+sig_tensor_transpose_3d_64 = types.float64[:,:,:,:,:](
+    types.float64[:,:,:,:,:]
     )
