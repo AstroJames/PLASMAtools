@@ -239,7 +239,7 @@ class Fields():
         
     def reformat_error(self,
                        var: str) -> None:
-        Error(f"Cannot compute {var} without reformating the data.")
+        RuntimeError(f"Cannot compute {var} without reformating the data.")
     
     def read(self,
              field_str          : str,
