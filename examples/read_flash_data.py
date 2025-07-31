@@ -12,7 +12,7 @@ X, Y, Z = 0, 1, 2
 
 if __name__ == "__main__":
     # Specify the path to your flash data file
-    file_path = "/Users/beattijr/Documents/Research/2024/vortex_dynamics/data/Turb_hdf5_plt_cnt_0050_M2MA01"  # Replace with your actual file path
+    file_path = "/path/to/data/Turb_hdf5_plt_cnt_0050"  # Replace with your actual file path
     
     # Initialize Fields class to read data
     fields = Fields(file_path,
