@@ -252,7 +252,10 @@ class DerivedVars(ScalarOperations,
         self,
         vector_field: np.ndarray) -> np.ndarray:
         """
-        Compute the gradient tensor of a vector field, fast :).
+        Compute the gradient tensor of a vector field.
+        
+        For 3D, uses the fast fused kernel. For 2D, uses manual computation
+        with individual gradient calls.
         """
         
         out = np.zeros((self.num_of_dims, 
@@ -260,9 +263,26 @@ class DerivedVars(ScalarOperations,
                         *vector_field[X].shape),
                        dtype=vector_field.dtype)
         
-        out = self.d.gradient_tensor_fast(
-            vector_field,
-            self.L[X])
+        if self.num_of_dims == 3:
+            # Use fast 3D implementation
+            try:
+                out = self.d.gradient_tensor_fast(
+                    vector_field,
+                    self.L[X])
+                return out
+            except Exception:
+                # Fall back to manual computation if fast version fails
+                pass
+        
+        # Manual computation for 2D or as fallback for 3D
+        for i in range(self.num_of_dims):  # For each vector component
+            for j in range(self.num_of_dims):  # For each spatial direction
+                out[i, j] = self.d.gradient(
+                    vector_field[i],
+                    gradient_dir=j,
+                    L=self.L[j] if isinstance(self.L, (list, tuple)) else self.L,
+                    boundary_condition=self.bcs[j]
+                )
         
         return out
 
