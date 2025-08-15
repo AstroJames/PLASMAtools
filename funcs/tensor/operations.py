@@ -121,6 +121,15 @@ class TensorOperations:
         """
         Decompose tensor into three orgthogonal tensors. (1) symmetric, (2) antisymmetric, (3) trace.
         """
+        
+        def _stub_like_3d(tensor_field: np.ndarray) -> np.ndarray:
+            # Matches 5D rank, zero-length so it's cheap; dtype matches input
+            return np.empty((0, 0, 0, 0, 0), dtype=tensor_field.dtype)
+
+        def _stub_like_2d(tensor_field: np.ndarray) -> np.ndarray:
+            # For a (2,2,Nx,Ny) style kernel; keep rank, zero-length spatial dims
+            return np.empty((0, 0, 0, 0), dtype=tensor_field.dtype)
+        
         if all:
             sym = asym = bulk = True
         
@@ -141,17 +150,17 @@ class TensorOperations:
         if num_of_dims == 3:
             tensor_decomp_3D_nb_core(
                 tensor_field,
-                outputs.get('sym', outputs.get('asym', outputs['bulk'])),
-                outputs.get('asym', outputs.get('sym', outputs['bulk'])),
-                outputs.get('bulk', outputs.get('sym', outputs['asym'])),
+                outputs.get('sym', _stub_like_3d(tensor_field)),
+                outputs.get('asym', _stub_like_3d(tensor_field)),
+                outputs.get('bulk', _stub_like_3d(tensor_field)),
                 (sym, asym, bulk)
             )
         else:
             tensor_decomp_2D_nb_core(
                 tensor_field,
-                outputs.get('sym', outputs.get('asym', outputs['bulk'])),
-                outputs.get('asym', outputs.get('sym', outputs['bulk'])),
-                outputs.get('bulk', outputs.get('sym', outputs['asym'])),
+                outputs.get('sym', _stub_like_2d(tensor_field)),
+                outputs.get('asym', _stub_like_2d(tensor_field)),
+                outputs.get('bulk', _stub_like_2d(tensor_field)),
                 (sym, asym, bulk)
             )
         
