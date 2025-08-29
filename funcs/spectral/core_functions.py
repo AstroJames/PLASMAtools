@@ -169,6 +169,62 @@ def spherical_integrate_3D_core(
 
 
 @njit(parallel=True, fastmath=True, cache=True)
+def spherical_integrate_3D_shear_core(
+    data: np.ndarray,
+    kx_1d: np.ndarray,
+    ky_1d: np.ndarray,
+    kz_1d: np.ndarray,
+    S: float,
+    t: float,
+    bin_edges: np.ndarray,
+    bins: int) -> np.ndarray:
+    """
+    Shear-aware 3D spherical integration using instantaneous k:
+      kx_inst = kx + S*t*ky
+      k = sqrt(kx_inst^2 + ky^2 + kz^2)
+    Returns per-bin sums over the provided bin_edges.
+    """
+    nx, ny, nz = data.shape
+    n_threads = numba.config.NUMBA_NUM_THREADS
+    local_sums = np.zeros((n_threads, bins), dtype=data.dtype)
+
+    for ix in prange(nx):
+        tid = numba.get_thread_id()
+        kx_val = kx_1d[ix]
+        for iy in range(ny):
+            ky_val = ky_1d[iy]
+            kx_inst = kx_val + (S * t) * ky_val
+            base = kx_inst*kx_inst + ky_val*ky_val
+            for iz in range(nz):
+                kz_val = kz_1d[iz]
+                k_mag = np.sqrt(base + kz_val*kz_val)
+
+                # binary search for bin index
+                if k_mag < bin_edges[0]:
+                    b = -1
+                elif k_mag >= bin_edges[-1]:
+                    b = bins
+                else:
+                    left = 0; right = len(bin_edges) - 1
+                    while left < right:
+                        mid = (left + right) // 2
+                        if k_mag < bin_edges[mid]:
+                            right = mid
+                        else:
+                            left = mid + 1
+                    b = left - 1
+
+                if 0 <= b < bins:
+                    local_sums[tid, b] += data[ix, iy, iz]
+
+    radial_sum = np.zeros(bins, dtype=data.dtype)
+    for j in range(bins):
+        for tid in range(n_threads):
+            radial_sum[j] += local_sums[tid, j]
+    return radial_sum
+
+
+@njit(parallel=True, fastmath=True, cache=True)
 def compute_cylindrical_distances_core(
     shape: tuple) -> tuple:
     """

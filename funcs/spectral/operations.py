@@ -133,48 +133,148 @@ class SpectralOperations():
     def compute_power_spectrum_3D(
         self, 
         field: np.ndarray,
-        field_name : str = "field") -> np.ndarray:
+        field_name : str = "field",
+        shear: bool = False,
+        S: float | None = None,
+        t: float | None = None,
+        y_coords: np.ndarray | None = None) -> np.ndarray:
         """
-        Computes the power spectrum using cached FFT plans.
+        Computes the 3D power spectrum using cached FFT plans.
+
+        Parameters
+        ----------
+        field : np.ndarray
+            Array shaped (ncomp, Nx, Ny, Nz). Sum over components is performed internally.
+        field_name : str
+            Name for logging/error messages.
+        shear : bool, optional
+            If True, apply shearing-box phase correction (Route A) before completing the FFTs.
+        S : float, optional
+            Shear rate (S = q * Omega). Required if `shear` is True.
+        t : float, optional
+            Time at which the spectrum is computed. Required if `shear` is True.
+        y_coords : np.ndarray, optional
+            Physical y-coordinates of cell centers with shape (Ny,). If None and `shear` is True,
+            a uniform grid in [0, Ly) is assumed based on self.L[Y].
+
+        Returns
+        -------
+        np.ndarray
+            Power spectrum cube with shape (Nx, Ny, Nz), fftshifted.
+
+        Notes
+        -----
+        - For shearing-box analyses, this routine implements the phase-shift (de-shearing)
+          method: FFT in x, multiply by exp[-i ky S t x], then FFT in y and z.
+
+        
         """
         assert len(field.shape) == 4, "Field should be 3D"
         
-        # Ensure data is float32 for memory efficiency
-        field = ensure_float32(
-            field, 
-            field_name=field_name)
-        
-        # Use cached FFT
-        field_fft = self._do_fft(
-            field, 
-            axes=(X_GRID_VEC, Y_GRID_VEC, Z_GRID_VEC), 
-            forward=True, 
-            real=np.isrealobj(field), 
-            norm='forward')
-        
-        # Compute power spectrum
-        out = np.sum(
-            np.abs(field_fft)**2,
-            axis=0)
-        
-        # Handle real FFT output shape
-        if np.isrealobj(field) and field_fft.shape[-1] != field.shape[-1]:
-            # Restore full spectrum by mirroring
-            N = field.shape
-            full_out = np.zeros((N[X_GRID_VEC],
-                                 N[Y_GRID_VEC],
-                                 N[Z_GRID_VEC]), dtype=out.dtype)
-            full_out[:, :, :out.shape[-1]] = out
-            # Mirror conjugate parts
-            if N[Z_GRID_VEC] % 2 == 0:
-                full_out[:, :, -N[Z_GRID_VEC]//2+1:] = out[:, :, 1:N[Z_GRID_VEC]//2][:, :, ::-1]
+        field = ensure_float32(field, field_name=field_name)
+        is_real = np.isrealobj(field)
+
+        if not shear:
+            # -----------------------------
+            # non-sheared power spectrum
+            # -----------------------------
+            field_fft = self._do_fft(
+                field, 
+                axes=(X_GRID_VEC,
+                      Y_GRID_VEC,
+                      Z_GRID_VEC), 
+                forward=True, 
+                real=is_real, 
+                norm='forward')
+
+            out = np.sum(np.abs(field_fft)**2, axis=0)
+
+            # Handle real FFT output shape
+            if is_real and field_fft.shape[-1] != field.shape[-1]:
+                N = field.shape
+                full_out = np.zeros((N[X_GRID_VEC], N[Y_GRID_VEC], N[Z_GRID_VEC]), dtype=out.dtype)
+                full_out[:, :, :out.shape[-1]] = out
+                if N[Z_GRID_VEC] % 2 == 0:
+                    full_out[:, :, -N[Z_GRID_VEC]//2+1:] = out[:, :, 1:N[Z_GRID_VEC]//2][:, :, ::-1]
+                else:
+                    full_out[:, :, -N[Z_GRID_VEC]//2:] = out[:, :, 1:N[Z_GRID_VEC]//2+1][:, :, ::-1]
+                out = full_out
+
+            return fftshift(
+                out, 
+                axes=(X, Y, Z)
+                )
+
+        # --------------------------------------------------
+        # Shear-corrected spectrum
+        # --------------------------------------------------
+        # Validate inputs
+        if S is None or t is None:
+            raise ValueError("When shear=True, both S (shear rate) and t (time) must be provided.")
+
+        # Grid sizes and coordinates
+        Nx = field.shape[X_GRID_VEC]
+        Ny = field.shape[Y_GRID_VEC]
+        Nz = field.shape[Z_GRID_VEC]
+
+        if x_coords is None:
+            # Build uniform physical grid in [0, Ly)
+            Lx = self.L[X]
+            dx = Lx / Nx
+            x_coords = np.linspace(-Lx/2,
+                                   Lx/2,
+                                   Nx).astype(np.float32)
+        else:
+            if x_coords.shape[0] != Nx:
+                raise ValueError("x_coords must have length Nx (the size of the first grid dimension).")
+
+        # Physical wavenumbers consistent with numpy FFT convention (angular wavenumber)
+        # kx = 2pi * m / Lx, where m are the FFT integer frequencies from fftfreq
+        Ly = self.L[Y]
+        ky_vals = TwoPi * fftfreq(Ny, d=Ly / Ny).astype(np.float32)  # shape: (Nx,)
+
+        # 1) FFT in x only (keep y,z in real space for now)
+        Fx = self._do_fft(
+            field,
+            axes=(X_GRID_VEC,),
+            forward=True,
+            real=is_real,
+            norm='forward'
+        )  # -> (ncomp, Nx, Ny, Nz)
+
+        # 2) Apply de-shearing phase: exp[-i * kx * S * t * y]
+        # Build broadcastable phase with shape (1, Nx, Ny, 1)
+        phase_2d = np.exp(-1j * ky_vals[:, None] * (S * t) * x_coords[None, :])  # (Nx, Ny)
+        phase = phase_2d[None, :, :, None]
+        Fx = Fx * phase
+
+        # 3) FFT in y and z
+        Fxyz = self._do_fft(
+            Fx,
+            axes=(Y_GRID_VEC, Z_GRID_VEC),
+            forward=True,
+            real=False,   # complex due to phase
+            norm='forward'
+        )  # -> (ncomp, Nx, Ny, Nz_k)
+
+        # 4) Power spectrum (sum over components)
+        out = np.sum(np.abs(Fxyz)**2, axis=0)  # (Nx, Ny, Nz_k)
+
+        # 5) If the input was real and we used an rFFT along z in _do_fft inside cached path,
+        #    restore the Hermitian half to a full cube, mirroring exactly as in the original code.
+        if is_real and Fxyz.shape[-1] != field.shape[-1]:
+            full = np.zeros((Nx, Ny, Nz), dtype=out.dtype)
+            full[:, :, :out.shape[-1]] = out
+            if Nz % 2 == 0:
+                full[:, :, -Nz//2+1:] = out[:, :, 1:Nz//2][:, :, ::-1]
             else:
-                full_out[:, :, -N[Z_GRID_VEC]//2:] = out[:, :, 1:N[Z_GRID_VEC]//2+1][:, :, ::-1]
-            out = full_out
-        
+                full[:, :, -Nz//2:] = out[:, :, 1:Nz//2+1][:, :, ::-1]
+            out = full
+
         return fftshift(
-            out, 
-            axes=(X, Y, Z))
+            out,
+            axes=(X, Y, Z)
+            )
     
 
     def compute_tensor_power_spectrum(
@@ -375,30 +475,86 @@ class SpectralOperations():
         self, 
         field: np.ndarray, 
         bins: int = None,
-        field_name : str = "field") -> tuple:
+        field_name : str = "field",
+        coords: str = "default",
+        S: float | None = None,
+        t: float | None = None) -> tuple:
         """
-        3D spherical integration (already optimized).
+        3D spherical integration to produce an isotropic 1D spectrum.
+
+        Parameters
+        ----------
+        field : np.ndarray
+            Power spectrum cube P(kx, ky, kz) with shape (Nx, Ny, Nz), typically the output of
+            `compute_power_spectrum_3D(...)` (already fftshifted in our pipeline).
+        bins : int, optional
+            Number of radial bins. Defaults to N//DEFAULT_BINS_RATIO.
+        field_name : str
+            Name for logging/error messages.
+        coords : {"default", "shear", "physical"}
+            - "default" (or "shear"): use the cube’s natural (kx0, ky, kz) indices (comoving shear coords).
+            - "physical": use instantaneous physical wavevectors with kx_inst = kx0 + S * t * ky.
+        S : float, optional
+            Shear rate (S = q * Omega). Required if coords == "physical".
+        t : float, optional
+            Time at which to evaluate kx_inst. Required if coords == "physical".
         """
         N = field.shape[N_COORDS_VEC]
         if not bins:
             bins = N // DEFAULT_BINS_RATIO
             
-        # Ensure data is float32 for memory efficiency
-        field = ensure_float32(
-            field,
-            field_name=field_name)
+        field = ensure_float32(field, field_name=field_name)
         
-        r = compute_radial_distances_3D_core(
-            field.shape)
-        bin_edges = np.linspace(DEFAULT_BIN_MIN, bins, bins + 1, dtype=np.float32)
-        radial_sum = spherical_integrate_3D_core(
-            field, 
-            r, 
-            bin_edges, 
-            bins)
-        k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
+        # rest-frame box coordinates
+        if coords in ("default", "shear"):
+            r = compute_radial_distances_3D_core(field.shape)
+            bin_edges = np.linspace(DEFAULT_BIN_MIN, bins, bins + 1, dtype=np.float32)
+            radial_sum = spherical_integrate_3D_core(
+                field, 
+                r, 
+                bin_edges, 
+                bins
+                )
+            k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
+            return k_modes, radial_sum
         
-        return k_modes, radial_sum
+        # instantaneous physical coordinates (for shearing boxes)
+        if coords == "physical":
+            if S is None or t is None:
+                raise ValueError("When coords='physical', both S (shear rate) and t (time) must be provided.")
+
+            Nx, Ny, Nz = field.shape
+
+            # 1D angular wavenumbers consistent with FFT conventions
+            kx_1d = TwoPi * fftfreq(Nx, d=self.L[X]/Nx).astype(np.float32)
+            ky_1d = TwoPi * fftfreq(Ny, d=self.L[Y]/Ny).astype(np.float32)
+            kz_1d = TwoPi * fftfreq(Nz, d=self.L[Z]/Nz).astype(np.float32)
+
+            # Conservative bin edges covering the shear mapping
+            # kx_ext = float(np.max(np.abs(kx_1d)))
+            # ky_ext = float(np.max(np.abs(ky_1d)))
+            # kz_ext = float(np.max(np.abs(kz_1d)))
+            # k_max = np.float32(np.sqrt((kx_ext + abs(S*t)*ky_ext)**2 + ky_ext**2 + kz_ext**2))
+            bin_edges = np.linspace(DEFAULT_BIN_MIN, bins, bins + 1, dtype=np.float32)
+
+            # Numba-accelerated shear-aware accumulation
+            radial_sum = spherical_integrate_3D_shear_core(
+                field.astype(np.float32),
+                kx_1d, 
+                ky_1d, 
+                kz_1d,
+                np.float32(S), 
+                np.float32(t),
+                bin_edges, 
+                bins
+            )
+            k_modes = np.ceil((bin_edges[:-1] + bin_edges[1:]) / 2)
+            return k_modes, radial_sum
+        
+        # Invalid option
+        raise ValueError("coords must be one of: 'default', 'shear', or 'physical'.")
+
+
 
 
     def cylindrical_integrate(
