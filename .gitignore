@@ -2,3 +2,43 @@
 settings*
 __pycache__/
 *.py[cod]
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.hdf
+*.csv
+.gitignore
+
+# Byte-compiled files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Virtual environments
+venv/
+env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.old
+*.swp
+*.swo
+*.DS_Store
+
+# pipenv, poetry, or other lock files (if applicable)
+*.lock
+
+# Environment variables files
+.env

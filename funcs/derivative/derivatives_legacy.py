@@ -20,9 +20,7 @@ class Derivative:
     """
     
     def __init__(self, 
-                 stencil : int = 2,
-                 L       : float = 1.0,
-                 boundary_condition: str = "periodic") -> None:
+                 stencil : int = 2) -> None:
         """
         Initialize the derivative class.
 
@@ -37,9 +35,6 @@ class Derivative:
         if stencil not in [2, 4, 6, 8]:
             raise ValueError("Invalid stencil order")
         self.stencil = stencil
-        
-        # Grid properties
-        self.L = L
         
         
     def apply_boundary_conditions(self, 
@@ -89,9 +84,7 @@ class Derivative:
     
     def remove_ghost_cells(self, 
                            scalar_field         : np.ndarray,
-                           gradient_dir         : int,
-                           boundary_condition   : str,
-                           scalar_field_shape   : np.ndarray) -> np.ndarray:
+                           gradient_dir         : int) -> np.ndarray:
         """
         Remove ghost cells from the scalar field.
 
@@ -124,6 +117,7 @@ class Derivative:
     
     
     def compute_dr(self, 
+                   L            : float,
                    shape        : np.ndarray,
                    gradient_dir : int) -> float:
         """
@@ -139,12 +133,13 @@ class Derivative:
             float: the grid spacing `dr`.
         """
         
-        return self.L / (shape[gradient_dir] - 1)
+        return L / (shape[gradient_dir] - 1)
 
 
     def gradient(self,
                  scalar_field       : np.ndarray,
                  gradient_dir       : int,
+                 L                  : float = 1.0,
                  derivative_order   : int = 1,
                  boundary_condition : str = "periodic") -> np.ndarray:
         """
@@ -186,7 +181,8 @@ class Derivative:
                                                       gradient_dir)
         
         # Compute the grid spacing `dr`
-        dr = self.compute_dr(scalar_field_shape,
+        dr = self.compute_dr(L,
+                             scalar_field_shape,
                              gradient_dir)
         
         # Compute the first order derivative
@@ -198,9 +194,7 @@ class Derivative:
                 return self.remove_ghost_cells(( 
                           (1./2.) * np.roll(scalar_field, F, axis=gradient_dir) \
                         - (1./2.) * np.roll(scalar_field, B, axis=gradient_dir)) / dr, 
-                        gradient_dir,
-                        boundary_condition,
-                        scalar_field_shape)
+                        gradient_dir)
             # four point stencil
             elif self.stencil == 4:
                 # df/dr = (-f(r+2dr) + 8f(r+dr) - 8f(r-dr) + f(r-2dr))/12dr
@@ -210,9 +204,7 @@ class Derivative:
                         + (2./3.)  * np.roll(scalar_field, F, axis=gradient_dir)   \
                         - (2./3.)  * np.roll(scalar_field, B, axis=gradient_dir)   \
                         + (1./12.) * np.roll(scalar_field, 2*B, axis=gradient_dir)) / dr, 
-                        gradient_dir,
-                        boundary_condition,
-                        scalar_field_shape)
+                        gradient_dir)
             # six point stencil
             elif self.stencil == 6:
                 # df/dr = (-f(r+3dr) + 9f(r+2dr) - 45f(r+dr) + 45f(r-dr) - 9f(r-2dr) + f(r-3dr))/60dr
@@ -224,9 +216,7 @@ class Derivative:
                         + (3./4.)  * np.roll(scalar_field, F, axis=gradient_dir)   \
                         - (3./20.) * np.roll(scalar_field, 2*F, axis=gradient_dir) \
                         + (1./60.) * np.roll(scalar_field, 3*F, axis=gradient_dir)) / dr, 
-                        gradient_dir,
-                        boundary_condition,
-                        scalar_field_shape)
+                        gradient_dir)
             # eight point stencil
             elif self.stencil == 8:
                 # df/dr = (-f(r+4dr) + 12f(r+3dr) - 66f(r+2dr) + 192f(r+dr) - 192f(r-dr) + 
@@ -241,9 +231,7 @@ class Derivative:
                             + (1./5.)   * np.roll(scalar_field, 2*B, axis=gradient_dir) \
                             - (4./105.) * np.roll(scalar_field, 3*B, axis=gradient_dir) \
                             + (1./280.) * np.roll(scalar_field, 4*B, axis=gradient_dir)) / dr, 
-                            gradient_dir,
-                            boundary_condition,
-                            scalar_field_shape)
+                            gradient_dir)
 
         if derivative_order ==2:
             Warning("Second derivative not tested thoroughly yet")
@@ -254,8 +242,7 @@ class Derivative:
                     np.roll(scalar_field,   F, axis=gradient_dir) 
                     - 2 * scalar_field 
                     + np.roll(scalar_field, B, axis=gradient_dir)) / dr**2, 
-                    gradient_dir,
-                    boundary_condition)
+                    gradient_dir)
             # four point stencil
             # d^2 f / dr^2 = (-f(r+4dr) + 16f(r+3dr) - 30f(r+2dr) + 16f(r+dr) - 30f(r) + 
             # 16f(r-dr) - 30f(r-2dr) + 16f(r-3dr) - f(r-4dr))/12dr^2
@@ -266,8 +253,7 @@ class Derivative:
                     - 30 * scalar_field
                     + 16 * np.roll(scalar_field, B, axis=gradient_dir)
                     - np.roll(scalar_field,    2*B, axis=gradient_dir)) / (12. * dr**2), 
-                    gradient_dir,
-                    boundary_condition)
+                    gradient_dir)
             # six point stencil
             # d^2 f / dr^2 = (-2f(r+3dr) + 27f(r+2dr) - 270f(r+dr) + 490f(r) 
             # - 270f(r-dr) + 27f(r-2dr) - 2f(r-3dr))/180dr^2
@@ -280,8 +266,7 @@ class Derivative:
                 + 270 * np.roll(scalar_field,   B,  axis=gradient_dir)
                 - 27 * np.roll(scalar_field,  2*B,  axis=gradient_dir)
                 + 2 * np.roll(scalar_field,   3*B,  axis=gradient_dir)) / (180. * dr**2),
-                gradient_dir,
-                boundary_condition) 
+                gradient_dir) 
             # eight point stencil
             # d^2 f / dr^2 = (-9f(r+4dr) + 128f(r+3dr) - 1008f(r+2dr) + 8064f(r+dr) - 14350f(r)
             # + 8064f(r-dr) - 1008f(r-2dr) + 128f(r-3dr) - 9f(r-4dr))/5040dr^2
@@ -296,5 +281,4 @@ class Derivative:
                     - 1008 * np.roll(scalar_field,  2*B, axis=gradient_dir)
                     + 128 * np.roll(scalar_field,   3*B, axis=gradient_dir)
                     - 9 * np.roll(scalar_field,     4*B, axis=gradient_dir)) / (5040. * dr**2),
-                    gradient_dir,
-                    boundary_condition)
+                    gradient_dir)
