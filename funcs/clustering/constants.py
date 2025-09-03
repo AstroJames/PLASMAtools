@@ -1,11 +1,13 @@
 """
-Type signatures and constants for clustering operations.
-Centralizes all Numba type definitions for friends-of-friends clustering.
+Constants and Numba type signatures for clustering.
+
+This module centralizes boundary-condition enums and the Ahead-Of-Time
+Numba signatures used by the compiled kernels. It is intentionally light
+and import‑safe for use across the package.
 
 Author: James R. Beattie
 """
 from numba import types
-import numpy as np
 
 ##############################################################################
 # Global constants
@@ -22,7 +24,25 @@ DIRICHLET = 2
 # Default parameters
 DEFAULT_LINKING_LENGTH = 0.2
 DEFAULT_MIN_CLUSTER_SIZE = 1
-HASH_FACTOR = 2.0  # spatial hash cell size factor relative to linking length
+HASH_FACTOR = 1.0  # spatial hash cell size ~ linking length for tight bins
+
+# Public exports
+__all__ = [
+    'X', 'Y', 'Z',
+    'PERIODIC', 'NEUMANN', 'DIRICHLET',
+    'DEFAULT_LINKING_LENGTH', 'DEFAULT_MIN_CLUSTER_SIZE', 'HASH_FACTOR',
+    # Signatures used by Numba-decorated kernels
+    'sig_distance_2d_32', 'sig_distance_2d_64',
+    'sig_distance_3d_32', 'sig_distance_3d_64',
+    'sig_hash_2d_32', 'sig_hash_2d_64',
+    'sig_hash_3d_32', 'sig_hash_3d_64',
+    'sig_union_find_32', 'sig_union_find_64',
+    'sig_union_32', 'sig_union_64',
+    'sig_fof_2d_32', 'sig_fof_2d_64',
+    'sig_fof_3d_32', 'sig_fof_3d_64',
+    'sig_find_neighbors_2d_32', 'sig_find_neighbors_2d_64',
+    'sig_find_neighbors_3d_32', 'sig_find_neighbors_3d_64',
+]
 
 ##############################################################################
 # Type signatures for Numba functions

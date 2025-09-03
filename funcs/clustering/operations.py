@@ -12,7 +12,6 @@ import numpy as np
 from .constants import *
 from .core_functions import *
 
-# All optimized functions are now in core_functions.py
 PARALLEL_AVAILABLE = True
 
 class ClusteringOperations():
@@ -101,7 +100,7 @@ class ClusteringOperations():
         linking_length = self.float_dtype(linking_length)
         min_cluster_size = self.int_dtype(min_cluster_size)
         
-        # Set default box size if not provided
+        # Set default box size if not provided and shift positions into [0, box)
         if box_size is None:
             pos_min = np.min(positions, axis=0)
             pos_max = np.max(positions, axis=0)
@@ -115,6 +114,10 @@ class ClusteringOperations():
             # Ensure minimum box size is at least 4x linking length in each dimension
             min_box_size = 4 * linking_length
             box_size = np.maximum(box_size, min_box_size).astype(self.float_dtype)
+
+            # Shift positions so they are within [0, box) to enable efficient cell-list hashing
+            origin = (pos_min - padding).astype(self.float_dtype)
+            positions = (positions - origin).astype(self.float_dtype)
         else:
             box_size = np.array(box_size, dtype=self.float_dtype)
         
@@ -153,6 +156,205 @@ class ClusteringOperations():
             print(f"Warning: Numba FOF failed ({e}), falling back to numpy implementation")
             return self._fof_numpy(positions, linking_length, box_size, 
                                  boundary_conditions, min_cluster_size)
+
+    def friends_of_friends_grid(
+        self,
+        positions: np.ndarray,
+        linking_length: float = DEFAULT_LINKING_LENGTH,
+        box_size: np.ndarray = None,
+        boundary_conditions: np.ndarray = None,
+        voxel_size: float = None,
+        connectivity: int = None,
+        min_points_per_voxel: int = 1,
+        min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
+    ) -> np.ndarray:
+        """
+        Discretized FOF via voxelization + connected components on a grid.
+
+        This approximates FOF by binning points into voxels of size `voxel_size`
+        (default ~ linking_length/2), labeling connected voxel components using
+        26-connectivity (3D) or 8-connectivity (2D), and mapping voxel labels
+        back to points. Components below `min_cluster_size` (measured in points)
+        are marked as noise (-1).
+
+        This method is memory efficient for sparse occupancy because it uses a
+        sparse BFS over occupied voxels (no full dense 3D arrays required).
+        """
+        if positions.ndim != 2:
+            raise ValueError("positions must be a 2D array (N, D)")
+        n_particles, spatial_dims = positions.shape
+        if spatial_dims != self.num_of_dims:
+            raise ValueError(f"positions must have {self.num_of_dims} spatial dimensions")
+        if n_particles == 0:
+            return np.array([], dtype=self.int_dtype)
+
+        # Defaults
+        if voxel_size is None:
+            # Half the linking length gives conservative connectivity
+            voxel_size = float(linking_length) * 0.5
+            if voxel_size <= 0:
+                voxel_size = float(linking_length)
+        if connectivity is None:
+            connectivity = 8 if self.num_of_dims == 2 else 26
+
+        # Precision and copies
+        positions = positions.astype(self.float_dtype)
+        linking_length = self.float_dtype(linking_length)
+        min_cluster_size = int(min_cluster_size)
+        min_points_per_voxel = int(min_points_per_voxel)
+
+        # Box and BCs
+        if box_size is None:
+            pos_min = np.min(positions, axis=0)
+            pos_max = np.max(positions, axis=0)
+            data_range = pos_max - pos_min
+            padding = np.maximum(2 * linking_length, 0.1 * data_range)
+            box_size = (data_range + 2 * padding).astype(self.float_dtype)
+            # Ensure minimum box size is at least 4x linking length
+            min_box_size = 4 * linking_length
+            box_size = np.maximum(box_size, min_box_size).astype(self.float_dtype)
+            origin = (pos_min - padding).astype(self.float_dtype)
+            pos = (positions - origin).astype(self.float_dtype)
+        else:
+            box_size = np.array(box_size, dtype=self.float_dtype)
+            pos = positions
+
+        if boundary_conditions is None:
+            boundary_conditions = np.full(self.num_of_dims, NEUMANN, dtype=np.int32)
+        else:
+            boundary_conditions = np.array(boundary_conditions, dtype=np.int32)
+
+        # Grid shape
+        dims = np.maximum(1, np.ceil(box_size / self.float_dtype(voxel_size)).astype(np.int64))
+        # Avoid pathological memory via dense volume by operating sparsely
+
+        # Compute voxel indices for each point
+        inv_vs = self.float_dtype(1.0) / self.float_dtype(voxel_size)
+        idx = np.floor(pos * inv_vs).astype(np.int64)
+
+        # Apply BC to indices: periodic wraps, neumann clamp
+        for d in range(self.num_of_dims):
+            if boundary_conditions[d] == PERIODIC:
+                idx[:, d] %= dims[d]
+            else:
+                idx[:, d] = np.minimum(np.maximum(idx[:, d], 0), dims[d] - 1)
+
+        # Map voxel (linear index) -> count of points
+        if self.num_of_dims == 2:
+            lin = idx[:, 0] * dims[1] + idx[:, 1]
+        else:
+            lin = (idx[:, 0] * dims[1] + idx[:, 1]) * dims[2] + idx[:, 2]
+        # Count per voxel
+        # Use dict for sparsity
+        counts = {}
+        for v in lin:
+            counts[v] = counts.get(v, 0) + 1
+
+        # Keep only voxels meeting threshold
+        occupied = [v for v, c in counts.items() if c >= min_points_per_voxel]
+        if not occupied:
+            return np.full(n_particles, -1, dtype=self.int_dtype)
+        occupied_set = set(occupied)
+
+        # Build adjacency via neighbor offsets
+        if self.num_of_dims == 2:
+            offsets = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if not (dx == 0 and dy == 0)]
+            if connectivity == 4:
+                offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        else:
+            offsets = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        if dx == 0 and dy == 0 and dz == 0:
+                            continue
+                        offsets.append((dx, dy, dz))
+            if connectivity in (6, 18):
+                # Filter offsets by Manhattan distance (6) or Chebyshev layers (18)
+                if connectivity == 6:
+                    offsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+                else:
+                    # 18-neighborhood: exclude corner diagonals
+                    offsets = [o for o in offsets if (abs(o[0]) + abs(o[1]) + abs(o[2])) <= 2]
+
+        # BFS over occupied voxels (sparse CCL)
+        component_id = {}
+        comp_sizes_pts = []  # total points per component (sum of voxel counts)
+        current_label = 0
+
+        def neighbors_from_lin(vlin):
+            if self.num_of_dims == 2:
+                x = vlin // dims[1]
+                y = vlin % dims[1]
+                for dx, dy in offsets:
+                    nx = x + dx
+                    ny = y + dy
+                    if boundary_conditions[0] == PERIODIC:
+                        nx %= dims[0]
+                    elif nx < 0 or nx >= dims[0]:
+                        continue
+                    if boundary_conditions[1] == PERIODIC:
+                        ny %= dims[1]
+                    elif ny < 0 or ny >= dims[1]:
+                        continue
+                    yield nx * dims[1] + ny
+            else:
+                x = vlin // (dims[1] * dims[2])
+                rem = vlin % (dims[1] * dims[2])
+                y = rem // dims[2]
+                z = rem % dims[2]
+                for dx, dy, dz in offsets:
+                    nx = x + dx
+                    ny = y + dy
+                    nz = z + dz
+                    if boundary_conditions[0] == PERIODIC:
+                        nx %= dims[0]
+                    elif nx < 0 or nx >= dims[0]:
+                        continue
+                    if boundary_conditions[1] == PERIODIC:
+                        ny %= dims[1]
+                    elif ny < 0 or ny >= dims[1]:
+                        continue
+                    if boundary_conditions[2] == PERIODIC:
+                        nz %= dims[2]
+                    elif nz < 0 or nz >= dims[2]:
+                        continue
+                    yield (nx * dims[1] + ny) * dims[2] + nz
+
+        for v in occupied:
+            if v in component_id:
+                continue
+            # BFS
+            q = [v]
+            component_id[v] = current_label
+            total_pts = counts.get(v, 0)
+            qi = 0
+            while qi < len(q):
+                cur = q[qi]
+                qi += 1
+                for nb in neighbors_from_lin(cur):
+                    if nb in occupied_set and nb not in component_id:
+                        component_id[nb] = current_label
+                        q.append(nb)
+                        total_pts += counts.get(nb, 0)
+            comp_sizes_pts.append(total_pts)
+            current_label += 1
+
+        # Filter by min_cluster_size (in points)
+        comp_keep = {cid for cid, sz in enumerate(comp_sizes_pts) if sz >= min_cluster_size}
+
+        # Map each point to its voxel component label
+        out = np.full(n_particles, -1, dtype=self.int_dtype)
+        for i in range(n_particles):
+            if self.num_of_dims == 2:
+                vlin = idx[i, 0] * dims[1] + idx[i, 1]
+            else:
+                vlin = (idx[i, 0] * dims[1] + idx[i, 1]) * dims[2] + idx[i, 2]
+            cid = component_id.get(vlin, -1)
+            if cid in comp_keep:
+                out[i] = cid
+
+        return out
     
     def _fof_numpy(
         self,
@@ -226,7 +428,9 @@ class ClusteringOperations():
         self,
         positions: np.ndarray,
         cluster_labels: np.ndarray,
-        radius_method: str = 'effective90') -> dict:
+        radius_method: str = 'effective90',
+        box_size: np.ndarray | None = None,
+        boundary_conditions: np.ndarray | None = None) -> dict:
         """
         Calculate properties of identified clusters.
         
@@ -238,6 +442,11 @@ class ClusteringOperations():
                          - 'effective50': radius containing 50% of points (half-mass radius)
                          - 'maximum': maximum distance from center (shock front)
                          - 'rms': root-mean-square radius (original method)
+            box_size: Optional domain lengths per axis. If provided with
+                      periodic boundary conditions, centers are computed with
+                      circular means and distances use minimal-image deltas.
+            boundary_conditions: Optional BCs per axis; used only if box_size
+                                  is provided to handle periodicity.
         
         Returns:
             Dictionary with cluster properties:
@@ -264,17 +473,43 @@ class ClusteringOperations():
         cluster_sizes = np.zeros(n_clusters, dtype=self.int_dtype)
         cluster_centers = np.zeros((n_clusters, self.num_of_dims), dtype=self.float_dtype)
         cluster_radii = np.zeros(n_clusters, dtype=self.float_dtype)
+
+        # Optional periodic handling
+        periodic_axes = None
+        L = None
+        if box_size is not None and boundary_conditions is not None:
+            L = np.array(box_size, dtype=self.float_dtype)
+            periodic_axes = np.array([bc == PERIODIC for bc in np.array(boundary_conditions, dtype=np.int32)])
         
         for i, cluster_id in enumerate(cluster_ids):
             mask = cluster_labels == cluster_id
             cluster_positions = positions[mask]
             
             cluster_sizes[i] = np.sum(mask)
-            cluster_centers[i] = np.mean(cluster_positions, axis=0)
+            # Center: use circular mean for periodic axes when available
+            if periodic_axes is not None:
+                for d in range(self.num_of_dims):
+                    if periodic_axes[d]:
+                        ang = (2.0 * np.pi * cluster_positions[:, d]) / L[d]
+                        s = np.sin(ang).sum(dtype=self.float_dtype)
+                        c = np.cos(ang).sum(dtype=self.float_dtype)
+                        theta = np.arctan2(s, c)
+                        if theta < 0:
+                            theta += 2.0 * np.pi
+                        cluster_centers[i, d] = (theta / (2.0 * np.pi)) * L[d]
+                    else:
+                        cluster_centers[i, d] = np.mean(cluster_positions[:, d], dtype=self.float_dtype)
+            else:
+                cluster_centers[i] = np.mean(cluster_positions, axis=0)
             
             # Calculate radius using specified method
             if cluster_sizes[i] > 1:
-                distances = np.linalg.norm(cluster_positions - cluster_centers[i], axis=1)
+                deltas = cluster_positions - cluster_centers[i]
+                if periodic_axes is not None:
+                    for d in range(self.num_of_dims):
+                        if periodic_axes[d]:
+                            deltas[:, d] = ((deltas[:, d] + 0.5 * L[d]) % L[d]) - 0.5 * L[d]
+                distances = np.linalg.norm(deltas, axis=1)
                 
                 if radius_method == 'effective90':
                     # Effective radius containing 90% of points (best for supernova extent)
@@ -367,7 +602,9 @@ class ClusteringOperations():
         self,
         mask: np.ndarray,
         min_thickness: int = 2,
-        remove_small_objects_size: int = None) -> np.ndarray:
+        remove_small_objects_size: int = None,
+        operation: str = 'open',
+        periodic_axes: tuple = None) -> np.ndarray:
         """
         Apply morphological filtering to remove thin shell-like features.
         
@@ -377,10 +614,12 @@ class ClusteringOperations():
         
         Args:
             mask: Binary mask (2D or 3D)
-            min_thickness: Minimum thickness in pixels for valid regions.
-                          Structures thinner than this will be removed.
+            min_thickness: Number of iterations for the morphology operation.
             remove_small_objects_size: Minimum size for connected components.
                                       If None, uses min_thickness^ndim * 8
+            operation: 'open' to remove thin links; 'close' to bridge small gaps
+            periodic_axes: tuple of booleans per axis; when True, wrap-pad that axis
+                           so morphology respects periodic boundaries
         
         Returns:
             Filtered binary mask with thin structures removed
@@ -403,20 +642,44 @@ class ClusteringOperations():
         # Use connectivity=1 (4-conn in 2D, 6-conn in 3D) for more aggressive filtering
         structure = ndimage.generate_binary_structure(ndim, connectivity=1)
         
-        # Step 1: Opening operation (erosion followed by dilation)
-        # This removes thin protrusions and breaks thin connections
-        if min_thickness > 0:
-            mask_opened = ndimage.binary_opening(
-                mask, 
-                structure=structure, 
-                iterations=min_thickness
-            )
+        # Optional periodic padding so morphology respects wrap-around connectivity
+        if periodic_axes is None:
+            periodic_axes = tuple([False] * ndim)
+        pad_n = max(1, int(min_thickness)) if min_thickness > 0 else 1
+        pad_spec = []
+        for ax in range(ndim):
+            if periodic_axes[ax]:
+                pad_spec.append((pad_n, pad_n))
+            else:
+                pad_spec.append((0, 0))
+        if any(pw[0] > 0 or pw[1] > 0 for pw in pad_spec):
+            mask_work = np.pad(mask, pad_spec, mode='wrap')
         else:
-            mask_opened = mask.copy()
-        
-        # Step 2: Fill small holes that might have been created
-        # This helps maintain the bulk structure of legitimate clusters
-        mask_filled = ndimage.binary_fill_holes(mask_opened)
+            mask_work = mask.copy()
+
+        # Step 1: Morphological operation
+        # 'open' removes thin connections; 'close' bridges small gaps
+        if operation == 'close':
+            if min_thickness > 0:
+                mask_morph = ndimage.binary_closing(
+                    mask_work,
+                    structure=structure,
+                    iterations=min_thickness
+                )
+            else:
+                mask_morph = mask_work.copy()
+        else:  # 'open' (default)
+            if min_thickness > 0:
+                mask_morph = ndimage.binary_opening(
+                    mask_work,
+                    structure=structure,
+                    iterations=min_thickness
+                )
+            else:
+                mask_morph = mask_work.copy()
+
+        # Step 2: Fill small holes to maintain bulk structure
+        mask_filled = ndimage.binary_fill_holes(mask_morph)
         
         # Step 3: Remove small disconnected components
         if remove_small_objects_size is None:
@@ -443,7 +706,18 @@ class ClusteringOperations():
             print(f"  Morphological filter removed {removed_pixels:,} pixels "
                   f"({100*removed_pixels/original_count:.1f}% of original)")
         
-        return mask_filled
+        # Crop back if padded
+        if any(pw[0] > 0 or pw[1] > 0 for pw in pad_spec):
+            slices = []
+            for ax in range(ndim):
+                if periodic_axes[ax]:
+                    slices.append(slice(pad_spec[ax][0], mask_filled.shape[ax] - pad_spec[ax][1]))
+                else:
+                    slices.append(slice(0, mask_filled.shape[ax]))
+            mask_final = mask_filled[tuple(slices)]
+        else:
+            mask_final = mask_filled
+        return mask_final
     
     def separate_overlapping_clusters(
         self,
@@ -614,33 +888,45 @@ class ClusteringOperations():
         min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
         morphological_filter: bool = False,
         min_thickness: int = 2,
+        morph_operation: str = 'open',
         separate_overlapping: bool = False,
         min_separation: float = 5.0,
         max_peaks: int = 3,
         max_clusters_to_process: int = 5,
-        return_field: bool = True) -> dict:
+        return_field: bool = True,
+        method: str = 'grid',
+        connectivity: int = 26,
+        boundary_conditions: np.ndarray = None,
+        split_large_clusters: bool = False,
+        split_size_factor: float = 10.0,
+        split_min_separation_vox: int = 5,
+        radius_method: str = 'effective90') -> dict:
         """
-        Cluster a 3D field directly by thresholding and friends-of-friends.
+        Cluster a 3D field directly via grid connected components or FOF.
         
         This is a convenience method that combines thresholding, optional morphological
-        filtering, position extraction, clustering, and optional mapping back to the grid.
+        filtering, clustering (grid-native or FOF), and optional mapping back to the grid.
         
         Args:
             field: 3D array to cluster
             threshold: Threshold value for creating binary mask. If None, uses median
             threshold_type: 'greater' or 'less' - how to apply threshold
             grid_spacing: Physical spacing between grid points
-            linking_length: Maximum distance for particles to be friends
+            linking_length: Maximum distance for particles to be friends (FOF method)
             min_cluster_size: Minimum number of particles for valid cluster
-            morphological_filter: If True, apply morphological filtering to remove
-                                thin shell-like artifacts (useful for supernova analysis)
-            min_thickness: Minimum thickness in pixels for morphological filtering
+            morphological_filter: If True, apply morphological filtering
+            min_thickness: Iterations for morphology
+            morph_operation: 'open' to remove thin links; 'close' to bridge small gaps
             separate_overlapping: If True, attempt to separate overlapping clusters
                                 using temperature peak detection (useful for nearby SNe)
             min_separation: Minimum distance between peaks for cluster separation
             max_peaks: Maximum number of peaks per cluster (prevents over-segmentation)
             max_clusters_to_process: Only process the N largest clusters (for performance)
             return_field: If True, return cluster labels mapped to 3D grid
+            method: 'grid' (default) for grid-native 3D connected-components; 'fof' for particle FOF
+            connectivity: Neighborhood connectivity for grid method (3D: 6/18/26; 2D: 4/8)
+            boundary_conditions: (D,) array of BCs for grid method; default [PERIODIC, PERIODIC, NEUMANN] in 3D
+            radius_method: 'effective90' (default), 'effective50', 'maximum', or 'rms' for cluster radius (grid mode)
         
         Returns:
             Dictionary containing:
@@ -679,7 +965,9 @@ class ClusteringOperations():
             mask = self.apply_morphological_filter(
                 mask, 
                 min_thickness=min_thickness,
-                remove_small_objects_size=None  # Use default sizing
+                remove_small_objects_size=None,  # Use default sizing
+                operation=morph_operation,
+                periodic_axes=tuple([bc == PERIODIC for bc in boundary_conditions])
             )
             n_active_filtered = np.sum(mask)
             if n_active_filtered != n_active:
@@ -704,18 +992,51 @@ class ClusteringOperations():
                 result['mask_original'] = mask_original
             return result
         
-        # Convert mask to positions
-        positions = self.binary_mask_to_positions(mask, grid_spacing)
-        
-        # Perform clustering
-        labels = self.friends_of_friends(
-            positions=positions,
-            linking_length=linking_length,
-            min_cluster_size=min_cluster_size
-        )
+        # Default BCs for grid method: periodic XY, Neumann Z
+        if boundary_conditions is None:
+            if self.num_of_dims == 3:
+                boundary_conditions = np.array([PERIODIC, PERIODIC, NEUMANN], dtype=np.int32)
+            elif self.num_of_dims == 2:
+                boundary_conditions = np.array([PERIODIC, PERIODIC], dtype=np.int32)
+            else:
+                boundary_conditions = np.full(self.num_of_dims, NEUMANN, dtype=np.int32)
+
+        if method == 'grid':
+            grid_labels = self._cluster_3d_mask_sparse(mask, connectivity=connectivity,
+                                                       boundary_conditions=boundary_conditions,
+                                                       min_cluster_size=min_cluster_size)
+            # Build positions for compatibility
+            positions = self.binary_mask_to_positions(mask, grid_spacing)
+            # Properties from grid
+            properties = self._properties_from_grid_labels(grid_labels, grid_spacing, radius_method=radius_method, boundary_conditions=boundary_conditions)
+            labels = properties.pop('_point_labels', None)
+            # Optionally split very large clusters using peak-based seeded growth
+            if split_large_clusters:
+                try:
+                    grid_labels = self._split_large_clusters_grid(
+                        field, grid_labels,
+                        size_threshold=max(int(split_size_factor * min_cluster_size), min_cluster_size*2),
+                        min_separation_vox=int(split_min_separation_vox),
+                        max_peaks=max_peaks,
+                        max_clusters_to_process=max_clusters_to_process,
+                    )
+                    properties = self._properties_from_grid_labels(grid_labels, grid_spacing, radius_method=radius_method, boundary_conditions=boundary_conditions)
+                except Exception as e:
+                    print(f"Warning: grid cluster splitting failed: {e}")
+        elif method == 'fof':
+            # Convert mask to positions
+            positions = self.binary_mask_to_positions(mask, grid_spacing)
+            labels = self.friends_of_friends(
+                positions=positions,
+                linking_length=linking_length,
+                min_cluster_size=min_cluster_size
+            )
+            properties = self.get_cluster_properties(positions, labels)
+        else:
+            raise ValueError("method must be 'grid' or 'fof'")
         
         # Apply cluster separation if requested
-        if separate_overlapping:
+        if separate_overlapping and method == 'fof':
             print("Applying cluster separation for overlapping explosions...")
             
             # Extract field values at cluster positions for peak detection
@@ -736,11 +1057,8 @@ class ClusteringOperations():
                 max_clusters_to_process=max_clusters_to_process
             )
         
-        # Get cluster properties
-        properties = self.get_cluster_properties(positions, labels)
-        
         result = {
-            'labels': labels,
+            'labels': labels if labels is not None else np.array([], dtype=self.int_dtype),
             'mask': mask,
             'positions': positions,
             'properties': properties
@@ -752,12 +1070,415 @@ class ClusteringOperations():
         
         # Optionally map back to 3D grid
         if return_field:
-            cluster_field = np.full(mask.shape, -1, dtype=self.int_dtype)
-            indices = np.where(mask)
-            cluster_field[indices] = labels
-            result['cluster_field'] = cluster_field
-        
+            if method == 'grid':
+                result['cluster_field'] = grid_labels
+            else:
+                cluster_field = np.full(mask.shape, -1, dtype=self.int_dtype)
+                indices = np.where(mask)
+                cluster_field[indices] = labels
+                result['cluster_field'] = cluster_field
+
         return result
+
+    def _split_large_clusters_grid(self, field: np.ndarray, labels_grid: np.ndarray,
+                                   size_threshold: int,
+                                   min_separation_vox: int = 5,
+                                   max_peaks: int = 3,
+                                   max_clusters_to_process: int = 5,
+                                   split_passes: int = 2,
+                                   split_bridge_thickness: int = 1,
+                                   split_connectivity: int = 6,
+                                   min_cluster_size: int = None) -> np.ndarray:
+        """
+        Split overly large grid-connected clusters by detecting multiple peaks
+        within each large component and assigning voxels via multi-source BFS.
+
+        Args:
+            field: 3D scalar field used to find peaks (e.g., temperature).
+            labels_grid: current grid labels (-1 for background).
+            size_threshold: process clusters with voxel count >= this.
+            min_separation_vox: minimum peak separation in voxels.
+            max_peaks: max peaks per cluster to seed (prevents over-segmentation).
+            max_clusters_to_process: process only the largest N clusters.
+        """
+        try:
+            from scipy import ndimage
+        except Exception:
+            print("Warning: scipy not available; skipping grid splitting")
+            return labels_grid
+
+        current = labels_grid.copy()
+        uniq = np.unique(current)
+        uniq = uniq[uniq >= 0]
+        if uniq.size == 0:
+            return current
+
+        if min_cluster_size is None:
+            # Keep any positive value; final filtering happens in properties step
+            min_cluster_size = 1
+
+        next_label = int(np.max(uniq)) + 1
+        structure = ndimage.generate_binary_structure(3, 1)
+        cc_structure = ndimage.generate_binary_structure(3, 1 if split_connectivity == 6 else 2)
+
+        for pass_idx in range(max(1, int(split_passes))):
+            # Recompute sizes each pass
+            uniq = np.unique(current)
+            uniq = uniq[uniq >= 0]
+            sizes = np.zeros(int(np.max(uniq)) + 1, dtype=np.int64)
+            for lab in uniq:
+                sizes[lab] = np.sum(current == lab)
+            large = [(int(lab), int(sizes[lab])) for lab in uniq if sizes[lab] >= int(size_threshold)]
+            if not large:
+                break
+            large.sort(key=lambda x: x[1], reverse=True)
+            large = large[:max_clusters_to_process]
+            print(f"Split pass {pass_idx+1}: processing {len(large)} large clusters (>= {size_threshold} vox)")
+
+            for lab, sz in large:
+                mask = current == lab
+                if not np.any(mask):
+                    continue
+                coords = np.array(np.where(mask))
+                mins = coords.min(axis=1)
+                maxs = coords.max(axis=1) + 1
+                sx, sy, sz_ = [slice(int(mins[d]), int(maxs[d])) for d in range(3)]
+                submask = mask[sx, sy, sz_]
+                subfield = field[sx, sy, sz_]
+
+                # Smooth and find peaks (candidate seeds)
+                subfield_s = ndimage.gaussian_filter(subfield.astype(np.float32), sigma=1.0)
+                foot = np.ones((max(1, int(min_separation_vox)),) * 3, dtype=bool)
+                local_max = (subfield_s == ndimage.maximum_filter(subfield_s, footprint=foot)) & submask
+                peak_indices = np.array(np.where(local_max)).T
+
+                # Morphological opening to break thin bridges and get seed regions
+                opened = ndimage.binary_opening(submask, structure=structure, iterations=max(1, int(split_bridge_thickness)))
+                labeled_opened, n_open = ndimage.label(opened, structure=cc_structure)
+
+                seeds = []
+                if n_open > 1:
+                    # Use top voxel in each opened component as a seed
+                    for cid in range(1, n_open + 1):
+                        comp_mask = labeled_opened == cid
+                        if not np.any(comp_mask):
+                            continue
+                        idxs = np.array(np.where(comp_mask)).T
+                        vals = subfield_s[comp_mask]
+                        if idxs.shape[0] == 0:
+                            continue
+                        best = idxs[np.argmax(vals)]
+                        seeds.append(tuple(best.tolist()))
+                elif peak_indices.shape[0] >= 2:
+                    # Fallback to multiple peaks as seeds
+                    peak_vals = subfield_s[local_max]
+                    order = np.argsort(peak_vals)[::-1]
+                    peak_indices = peak_indices[order][:max_peaks]
+                    for p in peak_indices:
+                        seeds.append((int(p[0]), int(p[1]), int(p[2])))
+                else:
+                    continue  # Nothing to split
+
+                # Multi-source BFS on the original submask
+                from collections import deque
+                sublabels = -np.ones(submask.shape, dtype=np.int32)
+                q = deque()
+                for k, (px, py, pz) in enumerate(seeds):
+                    sublabels[px, py, pz] = k
+                    q.append((px, py, pz))
+                neighbors = [(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
+                while q:
+                    x, y, z = q.popleft()
+                    lab_k = sublabels[x, y, z]
+                    for dx, dy, dz in neighbors:
+                        nx = x + dx; ny = y + dy; nz = z + dz
+                        if nx < 0 or ny < 0 or nz < 0 or nx >= submask.shape[0] or ny >= submask.shape[1] or nz >= submask.shape[2]:
+                            continue
+                        if not submask[nx, ny, nz]:
+                            continue
+                        if sublabels[nx, ny, nz] == -1:
+                            sublabels[nx, ny, nz] = lab_k
+                            q.append((nx, ny, nz))
+
+                n_new = int(np.max(sublabels) + 1)
+                if n_new <= 1:
+                    continue
+                # Apply split to global image
+                for k in range(n_new):
+                    sel = (sublabels == k)
+                    if not np.any(sel):
+                        continue
+                    if k == 0:
+                        current[sx, sy, sz_][sel] = lab
+                    else:
+                        current[sx, sy, sz_][sel] = next_label
+                        next_label += 1
+
+        # Final small-component filtering and label compaction
+        uniq = np.unique(current); uniq = uniq[uniq >= 0]
+        if uniq.size == 0:
+            return current
+        counts = np.zeros(int(np.max(uniq)) + 1, dtype=np.int64)
+        for lab in uniq:
+            counts[lab] = np.sum(current == lab)
+        for lab in uniq:
+            if counts[lab] < int(min_cluster_size):
+                current[current == lab] = -1
+        # Compact labels to 0..K-1
+        uniq = np.unique(current); uniq = uniq[uniq >= 0]
+        remap = {lab: i for i, lab in enumerate(uniq)}
+        it = np.nditer(current, flags=['multi_index', 'refs_ok'], op_flags=['readwrite'])
+        while not it.finished:
+            v = int(it[0])
+            if v >= 0:
+                it[0][...] = remap[v]
+            it.iternext()
+
+        return current
+
+    def _cluster_3d_mask_sparse(self, mask: np.ndarray, connectivity: int = 26,
+                                boundary_conditions: np.ndarray = None,
+                                min_cluster_size: int = 1) -> np.ndarray:
+        """
+        Sparse connected-component labeling on a boolean mask with boundary conditions.
+        Returns label grid (same shape) with -1 for background.
+        """
+        if mask.ndim != self.num_of_dims:
+            raise ValueError(f"Mask must be {self.num_of_dims}D")
+        dims = np.array(mask.shape, dtype=np.int64)
+        if boundary_conditions is None:
+            boundary_conditions = np.full(self.num_of_dims, NEUMANN, dtype=np.int32)
+        else:
+            boundary_conditions = np.array(boundary_conditions, dtype=np.int32)
+
+        idx = np.where(mask)
+        if len(idx[0]) == 0:
+            return np.full(mask.shape, -1, dtype=self.int_dtype)
+
+        if self.num_of_dims == 2:
+            lin = idx[0] * dims[1] + idx[1]
+        else:
+            lin = (idx[0] * dims[1] + idx[1]) * dims[2] + idx[2]
+        voxels = set(lin.tolist())
+
+        # Neighbor offsets
+        if self.num_of_dims == 2:
+            if connectivity == 4:
+                offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            else:
+                offsets = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if not (dx == 0 and dy == 0)]
+        else:
+            if connectivity == 6:
+                offsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
+            elif connectivity == 18:
+                offsets = []
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for dz in (-1, 0, 1):
+                            if dx == 0 and dy == 0 and dz == 0:
+                                continue
+                            if abs(dx) + abs(dy) + abs(dz) <= 2:
+                                offsets.append((dx, dy, dz))
+            else:  # 26
+                offsets = []
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for dz in (-1, 0, 1):
+                            if dx == 0 and dy == 0 and dz == 0:
+                                continue
+                            offsets.append((dx, dy, dz))
+
+        def neighbors_from_lin(vlin):
+            if self.num_of_dims == 2:
+                x = vlin // dims[1]
+                y = vlin % dims[1]
+                for dx, dy in offsets:
+                    nx = x + dx
+                    ny = y + dy
+                    if boundary_conditions[0] == PERIODIC:
+                        nx %= dims[0]
+                    elif nx < 0 or nx >= dims[0]:
+                        continue
+                    if boundary_conditions[1] == PERIODIC:
+                        ny %= dims[1]
+                    elif ny < 0 or ny >= dims[1]:
+                        continue
+                    yield nx * dims[1] + ny
+            else:
+                x = vlin // (dims[1] * dims[2])
+                rem = vlin % (dims[1] * dims[2])
+                y = rem // dims[2]
+                z = rem % dims[2]
+                for dx, dy, dz in offsets:
+                    nx = x + dx
+                    ny = y + dy
+                    nz = z + dz
+                    if boundary_conditions[0] == PERIODIC:
+                        nx %= dims[0]
+                    elif nx < 0 or nx >= dims[0]:
+                        continue
+                    if boundary_conditions[1] == PERIODIC:
+                        ny %= dims[1]
+                    elif ny < 0 or ny >= dims[1]:
+                        continue
+                    if boundary_conditions[2] == PERIODIC:
+                        nz %= dims[2]
+                    elif nz < 0 or nz >= dims[2]:
+                        continue
+                    yield (nx * dims[1] + ny) * dims[2] + nz
+
+        labels_grid = np.full(mask.shape, -1, dtype=self.int_dtype)
+        comp_id = {}
+        cur_label = 0
+
+        for v in voxels:
+            if v in comp_id:
+                continue
+            q = [v]
+            comp_id[v] = cur_label
+            qi = 0
+            while qi < len(q):
+                cur = q[qi]
+                qi += 1
+                for nb in neighbors_from_lin(cur):
+                    if (nb in voxels) and (nb not in comp_id):
+                        comp_id[nb] = cur_label
+                        q.append(nb)
+            cur_label += 1
+
+        # Count and filter
+        counts = np.zeros(cur_label, dtype=np.int64)
+        for v in voxels:
+            counts[comp_id[v]] += 1
+        keep = counts >= int(min_cluster_size)
+
+        # Fill grid labels and remap to 0..K-1
+        if self.num_of_dims == 2:
+            for x, y in zip(idx[0], idx[1]):
+                vlin = x * dims[1] + y
+                cid = comp_id.get(vlin, -1)
+                labels_grid[x, y] = cid if (cid != -1 and keep[cid]) else -1
+        else:
+            for x, y, z in zip(idx[0], idx[1], idx[2]):
+                vlin = (x * dims[1] + y) * dims[2] + z
+                cid = comp_id.get(vlin, -1)
+                labels_grid[x, y, z] = cid if (cid != -1 and keep[cid]) else -1
+
+        uniq = np.unique(labels_grid)
+        uniq = uniq[uniq >= 0]
+        remap = {lab: i for i, lab in enumerate(uniq)}
+        if uniq.size > 0:
+            it = np.nditer(labels_grid, flags=['multi_index', 'refs_ok'], op_flags=['readwrite'])
+            while not it.finished:
+                v = int(it[0])
+                if v >= 0:
+                    it[0][...] = remap[v]
+                it.iternext()
+
+        return labels_grid
+
+    def _properties_from_grid_labels(self, labels_grid: np.ndarray, grid_spacing: float = 1.0, radius_method: str = 'effective90', boundary_conditions: np.ndarray = None) -> dict:
+        """
+        Compute cluster properties from grid labels and return optional point labels.
+        """
+        props = {
+            'n_clusters': 0,
+            'cluster_sizes': np.array([]),
+            'cluster_centers': np.array([]).reshape(0, self.num_of_dims),
+            'cluster_radii': np.array([]),
+            '_point_labels': None,
+            'cluster_centers_vox': np.array([]).reshape(0, self.num_of_dims),
+        }
+        if labels_grid is None:
+            return props
+        uniq = np.unique(labels_grid)
+        uniq = uniq[uniq >= 0]
+        k = int(uniq.size)
+        if k == 0:
+            return props
+
+        sizes = np.zeros(k, dtype=self.int_dtype)
+        centers_vox = np.zeros((k, self.num_of_dims), dtype=self.float_dtype)
+        radii = np.zeros(k, dtype=self.float_dtype)
+        dims = np.array(labels_grid.shape, dtype=self.float_dtype)
+        # Handle periodic axes for distances
+        if boundary_conditions is None:
+            periodic_axes = np.zeros(self.num_of_dims, dtype=np.bool_)
+        else:
+            periodic_axes = np.array([bc == PERIODIC for bc in boundary_conditions])
+
+        coords = np.array(np.nonzero(labels_grid >= 0)).T.astype(self.float_dtype)
+        point_labels = labels_grid[labels_grid >= 0].astype(self.int_dtype)
+
+        # First pass: sizes per component
+        for lab in point_labels:
+            sizes[lab] += 1
+
+        # Compute cluster centers. For periodic axes, use circular mean so
+        # clusters that wrap around a boundary get a correct center.
+        for i in range(k):
+            pts = coords[point_labels == i]
+            if pts.size == 0:
+                continue
+            for d in range(self.num_of_dims):
+                if periodic_axes[d]:
+                    L = dims[d]
+                    # Convert voxel coordinates to angles on unit circle
+                    ang = (2.0 * np.pi * pts[:, d]) / L
+                    s = np.sin(ang).sum(dtype=self.float_dtype)
+                    c = np.cos(ang).sum(dtype=self.float_dtype)
+                    theta = np.arctan2(s, c)
+                    if theta < 0:
+                        theta += 2.0 * np.pi
+                    centers_vox[i, d] = (theta / (2.0 * np.pi)) * L
+                else:
+                    centers_vox[i, d] = np.mean(pts[:, d], dtype=self.float_dtype)
+
+        # Radius per cluster
+        for i in range(k):
+            pts = coords[point_labels == i]
+            if pts.size == 0:
+                continue
+            deltas = pts - centers_vox[i]
+            # Apply minimal-image convention for periodic axes
+            for d in range(self.num_of_dims):
+                if periodic_axes[d]:
+                    L = dims[d]
+                    deltas[:, d] = ((deltas[:, d] + 0.5 * L) % L) - 0.5 * L
+            dist2 = np.sum(deltas * deltas, axis=1)
+            if radius_method == 'rms':
+                radii[i] = np.sqrt(np.mean(dist2))
+            elif radius_method == 'maximum':
+                radii[i] = np.sqrt(np.max(dist2))
+            elif radius_method == 'effective50':
+                d = np.sqrt(dist2)
+                if d.size > 0:
+                    radii[i] = float(np.percentile(d, 50.0))
+                else:
+                    radii[i] = 0.0
+            else:  # 'effective90' default
+                d = np.sqrt(dist2)
+                if d.size > 0:
+                    radii[i] = float(np.percentile(d, 90.0))
+                else:
+                    radii[i] = 0.0
+
+        # Scale by spacing
+        if np.isscalar(grid_spacing):
+            centers = centers_vox * self.float_dtype(grid_spacing)
+            radii *= self.float_dtype(grid_spacing)
+        else:
+            spacing = np.array(grid_spacing, dtype=self.float_dtype)
+            centers = centers_vox * spacing
+            radii *= self.float_dtype(np.mean(spacing))
+
+        props['n_clusters'] = k
+        props['cluster_sizes'] = sizes
+        props['cluster_centers'] = centers
+        props['cluster_radii'] = radii
+        props['cluster_centers_vox'] = centers_vox
+        props['_point_labels'] = point_labels
+        return props
     
     def save_clustering_results(self, filename, results, compression='gzip', compression_opts=4):
         """
@@ -1131,3 +1852,152 @@ class ClusteringOperations():
             'center': center,
             'radius': radius
         }
+
+    def save_cluster_cubes(self, filename_base: str, results: dict, fields: dict,
+                           cube_size: int = 64,
+                           periodic_axes: tuple = None,
+                           include_derived: bool = True,
+                           compression: str = 'gzip', compression_opts: int = 4) -> str:
+        """
+        Save per-cluster local cubes around cluster centers to an HDF5 file.
+
+        Args:
+            filename_base: Base path (without .h5) used for output file name.
+            results: dict from cluster_3d_field (must include 'cluster_field' and 'properties').
+            fields: mapping of name -> 3D ndarray (e.g., temperature, density, pressure, vx, vy, vz).
+            cube_size: side length of cube (voxels, even enforced).
+            periodic_axes: tuple of booleans length D for periodicity (default: (True, True, False) in 3D).
+            include_derived: if True, compute and store u_c/u_s modes and vorticity/baroclinic cubes.
+            compression: HDF5 compression algorithm.
+            compression_opts: compression level for gzip.
+
+        Returns:
+            Output HDF5 filepath.
+        """
+        try:
+            import h5py
+        except ImportError:
+            raise ImportError("h5py required. Install with: pip install h5py")
+
+        if 'cluster_field' not in results or results['cluster_field'] is None:
+            raise ValueError("results must include 'cluster_field' from grid clustering")
+        props = results.get('properties', {})
+        if 'cluster_centers_vox' not in props:
+            # Recompute from labels if needed
+            props = self._properties_from_grid_labels(results['cluster_field'], grid_spacing=1.0)
+
+        grid = results['cluster_field']
+        dims = grid.shape
+        if periodic_axes is None:
+            periodic_axes = (True, True, False) if self.num_of_dims == 3 else tuple([True]*self.num_of_dims)
+
+        # Prepare derived variables if requested
+        velocity = None
+        if include_derived:
+            try:
+                vx = fields.get('vx'); vy = fields.get('vy'); vz = fields.get('vz')
+                if vx is not None and vy is not None and vz is not None:
+                    velocity = np.array([vx, vy, vz])
+                    from PLASMAtools.funcs.derived_vars import DerivedVars as DV
+                    dvf = DV()
+                    density = fields.get('density')
+                    pressure = fields.get('pressure')
+                    if density is not None and pressure is not None:
+                        omega, _c, _s, baro, _, _ = dvf.vorticity_decomp(
+                            velocity, density_scalar_field=np.array([density]), pressure_scalar_field=np.array([pressure])
+                        )
+                    else:
+                        omega = None; baro = None
+                    u_c, u_s = dvf.helmholtz_decomposition(velocity)
+                else:
+                    include_derived = False
+            except Exception as e:
+                print(f"Warning: failed to compute derived fields: {e}")
+                include_derived = False
+
+        def extract_cube(field, cx, cy, cz, half):
+            cube = np.zeros((2*half, 2*half, 2*half), dtype=field.dtype)
+            nx, ny, nz = dims
+            # X
+            x_idx = np.arange(cx - half, cx + half)
+            x_wrapped = (x_idx % nx) if periodic_axes[0] else np.clip(x_idx, 0, nx-1)
+            # Y
+            y_idx = np.arange(cy - half, cy + half)
+            y_wrapped = (y_idx % ny) if periodic_axes[1] else np.clip(y_idx, 0, ny-1)
+            # Z
+            z_idx = np.arange(cz - half, cz + half)
+            if self.num_of_dims == 3 and periodic_axes[2]:
+                z_wrapped = z_idx % nz
+                for ix, xi in enumerate(x_wrapped):
+                    for iy, yi in enumerate(y_wrapped):
+                        cube[ix, iy, :] = field[xi, yi, z_wrapped]
+            else:
+                z_start = max(0, cz - half)
+                z_end = min(nz, cz + half)
+                z_cube_start = max(0, half - cz)
+                z_cube_end = 2*half - max(0, (cz + half) - nz)
+                for ix, xi in enumerate(x_wrapped):
+                    for iy, yi in enumerate(y_wrapped):
+                        cube[ix, iy, z_cube_start:z_cube_end] = field[xi, yi, z_start:z_end]
+            return cube
+
+        n_clusters = int(props.get('n_clusters', 0))
+        centers_vox = props.get('cluster_centers_vox', np.array([]).reshape(0, self.num_of_dims))
+        out_path = filename_base if filename_base.endswith('.h5') else filename_base + '_cubes.h5'
+        # Enforce even size
+        cube_size = int(cube_size)
+        if cube_size % 2 != 0:
+            cube_size += 1
+        half = cube_size // 2
+
+        with h5py.File(out_path, 'w') as hf:
+            hf.attrs['n_clusters'] = n_clusters
+            hf.attrs['cube_size'] = cube_size
+            hf.attrs['fields'] = ','.join(fields.keys())
+
+            for i in range(n_clusters):
+                grp = hf.create_group(f'cluster_{i:02d}')
+                cx, cy, cz = centers_vox[i]
+                cx = int(round(float(cx))); cy = int(round(float(cy))); cz = int(round(float(cz)))
+
+                # Base fields
+                for name, arr in fields.items():
+                    if arr is None:
+                        continue
+                    cube = extract_cube(arr, cx, cy, cz, half)
+                    grp.create_dataset(name, data=cube, compression=compression, compression_opts=compression_opts)
+
+                # Cluster mask
+                mask_cube = extract_cube((grid == i).astype(np.uint8), cx, cy, cz, half) > 0
+                grp.create_dataset('cluster_mask', data=mask_cube, compression=compression, compression_opts=compression_opts)
+
+                # Derived
+                if include_derived and velocity is not None:
+                    try:
+                        ucx = extract_cube(u_c[0], cx, cy, cz, half); grp.create_dataset('u_cx', data=ucx, compression=compression, compression_opts=compression_opts)
+                        ucy = extract_cube(u_c[1], cx, cy, cz, half); grp.create_dataset('u_cy', data=ucy, compression=compression, compression_opts=compression_opts)
+                        ucz = extract_cube(u_c[2], cx, cy, cz, half); grp.create_dataset('u_cz', data=ucz, compression=compression, compression_opts=compression_opts)
+                        usx = extract_cube(u_s[0], cx, cy, cz, half); grp.create_dataset('u_sx', data=usx, compression=compression, compression_opts=compression_opts)
+                        usy = extract_cube(u_s[1], cx, cy, cz, half); grp.create_dataset('u_sy', data=usy, compression=compression, compression_opts=compression_opts)
+                        usz = extract_cube(u_s[2], cx, cy, cz, half); grp.create_dataset('u_sz', data=usz, compression=compression, compression_opts=compression_opts)
+                        if 'density' in fields and 'pressure' in fields:
+                            from PLASMAtools.funcs.derived_vars import DerivedVars as DV
+                            dvf = DV()
+                            try:
+                                _ = omega  # try reuse if defined
+                            except NameError:
+                                omega, _c, _s, baro, _, _ = dvf.vorticity_decomp(
+                                    velocity, density_scalar_field=np.array([fields['density']]), pressure_scalar_field=np.array([fields['pressure']])
+                                )
+                            ox = extract_cube(omega[0], cx, cy, cz, half); grp.create_dataset('omega_x', data=ox, compression=compression, compression_opts=compression_opts)
+                            oy = extract_cube(omega[1], cx, cy, cz, half); grp.create_dataset('omega_y', data=oy, compression=compression, compression_opts=compression_opts)
+                            oz = extract_cube(omega[2], cx, cy, cz, half); grp.create_dataset('omega_z', data=oz, compression=compression, compression_opts=compression_opts)
+                            om = np.sqrt(ox**2 + oy**2 + oz**2); grp.create_dataset('omega_mag', data=om, compression=compression, compression_opts=compression_opts)
+                            bx = extract_cube(baro[0], cx, cy, cz, half); grp.create_dataset('baro_x', data=bx, compression=compression, compression_opts=compression_opts)
+                            by = extract_cube(baro[1], cx, cy, cz, half); grp.create_dataset('baro_y', data=by, compression=compression, compression_opts=compression_opts)
+                            bz = extract_cube(baro[2], cx, cy, cz, half); grp.create_dataset('baro_z', data=bz, compression=compression, compression_opts=compression_opts)
+                            bm = np.sqrt(bx**2 + by**2 + bz**2); grp.create_dataset('baro_mag', data=bm, compression=compression, compression_opts=compression_opts)
+                    except Exception as e:
+                        print(f"Warning: failed to save derived cubes for cluster {i}: {e}")
+
+        return out_path

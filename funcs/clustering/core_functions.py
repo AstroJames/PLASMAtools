@@ -5,9 +5,7 @@ These are the performance-critical numerical kernels optimized for speed.
 Author: James R. Beattie
 """
 import numpy as np
-from numba import njit, prange, types
-from numba.typed import List
-import numba
+from numba import njit, types
 from .constants import *
 
 ##########################################################################################
@@ -168,200 +166,343 @@ def union_nodes(parent, node1, node2):
         parent[root2] = root1
 
 ##########################################################################################
-# Optimized neighbor finding functions (Phase 5 - Memory Optimized)
+# Union-find by size to reduce tree height (placed before kernels that use it)
 ##########################################################################################
 
-@njit([types.Tuple([types.int64[:], types.int64[:]])(
-    types.float32[:, :], types.float32, types.float32[:], types.int32[:], types.int64),
-    types.Tuple([types.int64[:], types.int64[:]])(
-    types.float64[:, :], types.float64, types.float64[:], types.int32[:], types.int64)],
-      parallel=True, fastmath=True, cache=True, nogil=True)
-def find_neighbors_2d_optimized(positions, linking_length, box_size, boundary_conditions, max_edges):
+@njit([types.void(types.int32[:], types.int32[:], types.int32, types.int32),
+       types.void(types.int64[:], types.int64[:], types.int64, types.int64)], cache=True, nogil=True)
+def union_nodes_by_size(parent, sizes, node1, node2):
+    r1 = find_root(parent, node1)
+    r2 = find_root(parent, node2)
+    if r1 == r2:
+        return
+    # Attach smaller to larger
+    if sizes[r1] < sizes[r2]:
+        r1, r2 = r2, r1
+    parent[r2] = r1
+    sizes[r1] += sizes[r2]
+
+##########################################################################################
+# Cell-list neighbor finding with on-the-fly union
+##########################################################################################
+
+@njit(fastmath=True, cache=True, nogil=True)
+def find_neighbors_2d_celllist_union(positions, linking_length, box_size, boundary_conditions, parent, sizes):
     """
-    Phase 5: Memory-optimized neighbor finding with inline distance calculation.
-    
-    Combines single-pass algorithm + inline distance + memory optimizations for best performance.
-    Expected ~5x speedup over sequential through multiple optimizations.
+    Cell-list neighbor search with on-the-fly union operations (2D).
+    Assumes positions lie in [0, box) when periodic; operations.py shifts when inferring box.
     """
     n_particles = positions.shape[0]
-    num_threads = numba.config.NUMBA_NUM_THREADS
-    
-    # Memory optimization: Larger buffer size for cache alignment
-    max_possible_edges = min(max_edges, (n_particles * (n_particles - 1)) // 2)
-    edges_per_thread = max_possible_edges // num_threads + 2000  # Optimal buffer size
-    
-    # Thread-local pre-allocated arrays
-    thread_edges_i = np.empty((num_threads, edges_per_thread), dtype=np.int64)
-    thread_edges_j = np.empty((num_threads, edges_per_thread), dtype=np.int64) 
-    thread_counts = np.zeros(num_threads, dtype=np.int64)
-    
-    # Pre-compute boundary condition checks and optimized constants
-    is_periodic_x = boundary_conditions[0] == PERIODIC
-    is_periodic_y = boundary_conditions[1] == PERIODIC
+    if n_particles <= 1:
+        return
+
+    # Grid configuration
+    cell_size = linking_length * HASH_FACTOR
+    if cell_size <= 0:
+        cell_size = linking_length
+
     box_x = box_size[0]
     box_y = box_size[1]
-    half_box_x = box_x * 0.5
-    half_box_y = box_y * 0.5
-    linking_length_sq = linking_length * linking_length
-    
-    # Single pass with inline distance calculation
-    for i in prange(n_particles):
-        thread_id = numba.get_thread_id()
-        local_count = 0
-        
-        for j in range(i + 1, n_particles):
-            # Calculate coordinate differences
-            dx = positions[i, 0] - positions[j, 0]
-            dy = positions[i, 1] - positions[j, 1]
-            
-            # Inline distance calculation with boundary conditions
-            if is_periodic_x:
-                if dx > half_box_x:
-                    dx -= box_x
-                elif dx < -half_box_x:
-                    dx += box_x
-            
-            if is_periodic_y:
-                if dy > half_box_y:
-                    dy -= box_y
-                elif dy < -half_box_y:
-                    dy += box_y
-            
-            # Calculate squared distance (avoid sqrt when possible)
-            dist_sq = dx * dx + dy * dy
-            
-            if dist_sq <= linking_length_sq:
-                # Store in thread-local arrays to avoid race conditions
-                current_idx = thread_counts[thread_id] + local_count
-                if current_idx < edges_per_thread:
-                    thread_edges_i[thread_id, current_idx] = i
-                    thread_edges_j[thread_id, current_idx] = j
-                    local_count += 1
-        
-        # Update thread count atomically after processing particle i
-        thread_counts[thread_id] += local_count
-    
-    # Merge thread results sequentially (no race conditions)
-    total_edges = np.sum(thread_counts)
-    total_edges = min(total_edges, max_possible_edges)
-    
-    edges_i = np.empty(total_edges, dtype=np.int64)
-    edges_j = np.empty(total_edges, dtype=np.int64)
-    
-    # Memory optimization: Block copy for better cache performance
-    edge_idx = 0
-    for t in range(num_threads):
-        count = min(thread_counts[t], edges_per_thread)
-        count = min(count, total_edges - edge_idx)  # Don't exceed total
-        
-        # Block copy optimization 
-        if count > 0:
-            end_idx = edge_idx + count
-            edges_i[edge_idx:end_idx] = thread_edges_i[t, :count]
-            edges_j[edge_idx:end_idx] = thread_edges_j[t, :count]
-            edge_idx = end_idx
-    
-    return edges_i[:edge_idx], edges_j[:edge_idx]
-
-
-@njit([types.Tuple([types.int64[:], types.int64[:]])(
-    types.float32[:, :], types.float32, types.float32[:], types.int32[:], types.int64),
-    types.Tuple([types.int64[:], types.int64[:]])(
-    types.float64[:, :], types.float64, types.float64[:], types.int32[:], types.int64)],
-      parallel=True, fastmath=True, cache=True, nogil=True)
-def find_neighbors_3d_optimized(positions, linking_length, box_size, boundary_conditions, max_edges):
-    """
-    Phase 5: Memory-optimized 3D neighbor finding with inline distance calculation.
-    """
-    n_particles = positions.shape[0]
-    num_threads = numba.config.NUMBA_NUM_THREADS
-    
-    # Memory optimization: Larger buffer size for cache alignment
-    max_possible_edges = min(max_edges, (n_particles * (n_particles - 1)) // 2)
-    edges_per_thread = max_possible_edges // num_threads + 2000  # Optimal buffer size
-    
-    # Thread-local pre-allocated arrays
-    thread_edges_i = np.empty((num_threads, edges_per_thread), dtype=np.int64)
-    thread_edges_j = np.empty((num_threads, edges_per_thread), dtype=np.int64) 
-    thread_counts = np.zeros(num_threads, dtype=np.int64)
-    
-    # Pre-compute boundary condition checks and optimized constants
+    nx = max(1, int(box_x / cell_size))
+    ny = max(1, int(box_y / cell_size))
     is_periodic_x = boundary_conditions[0] == PERIODIC
     is_periodic_y = boundary_conditions[1] == PERIODIC
-    is_periodic_z = boundary_conditions[2] == PERIODIC
+
+    # Build cell ids and counting-based binning
+    n_cells = nx * ny
+    cell_ids = np.empty(n_particles, dtype=np.int64)
+    offsets = np.zeros(n_cells + 1, dtype=np.int64)
+    inv_cell = 1.0 / cell_size
+    for i in range(n_particles):
+        ix = int(positions[i, 0] * inv_cell)
+        iy = int(positions[i, 1] * inv_cell)
+        if ix < 0:
+            ix = 0
+        elif ix >= nx:
+            ix = nx - 1
+        if iy < 0:
+            iy = 0
+        elif iy >= ny:
+            iy = ny - 1
+        cid = ix * ny + iy
+        cell_ids[i] = cid
+        offsets[cid + 1] += 1
+    for c in range(n_cells):
+        offsets[c + 1] += offsets[c]
+    # Fill indices array per cell
+    write_ptr = offsets.copy()
+    order = np.empty(n_particles, dtype=np.int64)
+    for i in range(n_particles):
+        cid = cell_ids[i]
+        idx = write_ptr[cid]
+        order[idx] = i
+        write_ptr[cid] = idx + 1
+
+    half_x = box_x * 0.5
+    half_y = box_y * 0.5
+    ll2 = linking_length * linking_length
+
+    # Iterate cells and neighbors (cover each pair once)
+    for cx in range(nx):
+        for cy in range(ny):
+            cell_id = cx * ny + cy
+            a0 = offsets[cell_id]
+            a1 = offsets[cell_id + 1]
+
+            # Within-cell pairs
+            for ia in range(a0, a1):
+                i = order[ia]
+                for ja in range(ia + 1, a1):
+                    j = order[ja]
+                    dx = positions[i, 0] - positions[j, 0]
+                    dy = positions[i, 1] - positions[j, 1]
+                    if is_periodic_x:
+                        if dx > half_x:
+                            dx -= box_x
+                        elif dx < -half_x:
+                            dx += box_x
+                    if is_periodic_y:
+                        if dy > half_y:
+                            dy -= box_y
+                        elif dy < -half_y:
+                            dy += box_y
+                    if dx * dx + dy * dy <= ll2:
+                        union_nodes_by_size(parent, sizes, i, j)
+
+            # Fixed forward neighbor offsets: (1,0), (0,1), (1,1), (-1,1)
+            for t in range(4):
+                if t == 0:
+                    dx_off = 1; dy_off = 0
+                elif t == 1:
+                    dx_off = 0; dy_off = 1
+                elif t == 2:
+                    dx_off = 1; dy_off = 1
+                else:
+                    dx_off = -1; dy_off = 1
+
+                nx_idx = cx + dx_off
+                ny_idx = cy + dy_off
+                if is_periodic_x:
+                    if nx_idx < 0:
+                        nx_idx += nx
+                    elif nx_idx >= nx:
+                        nx_idx -= nx
+                else:
+                    if nx_idx < 0 or nx_idx >= nx:
+                        continue
+                if is_periodic_y:
+                    if ny_idx < 0:
+                        ny_idx += ny
+                    elif ny_idx >= ny:
+                        ny_idx -= ny
+                else:
+                    if ny_idx < 0 or ny_idx >= ny:
+                        continue
+                nb_id = nx_idx * ny + ny_idx
+                b0 = offsets[nb_id]
+                b1 = offsets[nb_id + 1]
+                for ia in range(a0, a1):
+                    i = order[ia]
+                    for jb in range(b0, b1):
+                        j = order[jb]
+                        dx = positions[i, 0] - positions[j, 0]
+                        dy = positions[i, 1] - positions[j, 1]
+                        if is_periodic_x:
+                            if dx > half_x:
+                                dx -= box_x
+                            elif dx < -half_x:
+                                dx += box_x
+                        if is_periodic_y:
+                            if dy > half_y:
+                                dy -= box_y
+                            elif dy < -half_y:
+                                dy += box_y
+                        if dx * dx + dy * dy <= ll2:
+                            union_nodes_by_size(parent, sizes, i, j)
+
+
+@njit(fastmath=True, cache=True, nogil=True)
+def find_neighbors_3d_celllist_union(positions, linking_length, box_size, boundary_conditions, parent, sizes):
+    """
+    Cell-list neighbor search with on-the-fly union operations (3D).
+    Assumes positions lie in [0, box) when periodic; operations.py shifts when inferring box.
+    """
+    n_particles = positions.shape[0]
+    if n_particles <= 1:
+        return
+
+    cell_size = linking_length * HASH_FACTOR
+    if cell_size <= 0:
+        cell_size = linking_length
+
     box_x = box_size[0]
     box_y = box_size[1]
     box_z = box_size[2]
-    half_box_x = box_x * 0.5
-    half_box_y = box_y * 0.5
-    half_box_z = box_z * 0.5
-    linking_length_sq = linking_length * linking_length
-    
-    # Single pass with inline distance calculation
-    for i in prange(n_particles):
-        thread_id = numba.get_thread_id()
-        local_count = 0
-        
-        for j in range(i + 1, n_particles):
-            # Calculate coordinate differences
-            dx = positions[i, 0] - positions[j, 0]
-            dy = positions[i, 1] - positions[j, 1]
-            dz = positions[i, 2] - positions[j, 2]
-            
-            # Inline distance calculation with boundary conditions
-            if is_periodic_x:
-                if dx > half_box_x:
-                    dx -= box_x
-                elif dx < -half_box_x:
-                    dx += box_x
-            
-            if is_periodic_y:
-                if dy > half_box_y:
-                    dy -= box_y
-                elif dy < -half_box_y:
-                    dy += box_y
-            
-            if is_periodic_z:
-                if dz > half_box_z:
-                    dz -= box_z
-                elif dz < -half_box_z:
-                    dz += box_z
-            
-            # Calculate squared distance (avoid sqrt when possible)
-            dist_sq = dx * dx + dy * dy + dz * dz
-            
-            if dist_sq <= linking_length_sq:
-                # Store in thread-local arrays to avoid race conditions
-                current_idx = thread_counts[thread_id] + local_count
-                if current_idx < edges_per_thread:
-                    thread_edges_i[thread_id, current_idx] = i
-                    thread_edges_j[thread_id, current_idx] = j
-                    local_count += 1
-        
-        # Update thread count atomically after processing particle i
-        thread_counts[thread_id] += local_count
-    
-    # Merge thread results sequentially (no race conditions)
-    total_edges = np.sum(thread_counts)
-    total_edges = min(total_edges, max_possible_edges)
-    
-    edges_i = np.empty(total_edges, dtype=np.int64)
-    edges_j = np.empty(total_edges, dtype=np.int64)
-    
-    # Memory optimization: Block copy for better cache performance
-    edge_idx = 0
-    for t in range(num_threads):
-        count = min(thread_counts[t], edges_per_thread)
-        count = min(count, total_edges - edge_idx)  # Don't exceed total
-        
-        # Block copy optimization 
-        if count > 0:
-            end_idx = edge_idx + count
-            edges_i[edge_idx:end_idx] = thread_edges_i[t, :count]
-            edges_j[edge_idx:end_idx] = thread_edges_j[t, :count]
-            edge_idx = end_idx
-    
-    return edges_i[:edge_idx], edges_j[:edge_idx]
+    nx = max(1, int(box_x / cell_size))
+    ny = max(1, int(box_y / cell_size))
+    nz = max(1, int(box_z / cell_size))
+    is_periodic_x = boundary_conditions[0] == PERIODIC
+    is_periodic_y = boundary_conditions[1] == PERIODIC
+    is_periodic_z = boundary_conditions[2] == PERIODIC
+
+    # Build cell ids and counting-based binning
+    n_cells = nx * ny * nz
+    cell_ids = np.empty(n_particles, dtype=np.int64)
+    offsets = np.zeros(n_cells + 1, dtype=np.int64)
+    inv_cell = 1.0 / cell_size
+    for i in range(n_particles):
+        ix = int(positions[i, 0] * inv_cell)
+        iy = int(positions[i, 1] * inv_cell)
+        iz = int(positions[i, 2] * inv_cell)
+        if ix < 0:
+            ix = 0
+        elif ix >= nx:
+            ix = nx - 1
+        if iy < 0:
+            iy = 0
+        elif iy >= ny:
+            iy = ny - 1
+        if iz < 0:
+            iz = 0
+        elif iz >= nz:
+            iz = nz - 1
+        cid = (ix * ny + iy) * nz + iz
+        cell_ids[i] = cid
+        offsets[cid + 1] += 1
+    for c in range(n_cells):
+        offsets[c + 1] += offsets[c]
+    # Fill indices array per cell
+    write_ptr = offsets.copy()
+    order = np.empty(n_particles, dtype=np.int64)
+    for i in range(n_particles):
+        cid = cell_ids[i]
+        idx = write_ptr[cid]
+        order[idx] = i
+        write_ptr[cid] = idx + 1
+
+    half_x = box_x * 0.5
+    half_y = box_y * 0.5
+    half_z = box_z * 0.5
+    ll2 = linking_length * linking_length
+
+    # Iterate cells and 13-forward neighbors to avoid duplicates
+    for cx in range(nx):
+        for cy in range(ny):
+            for cz in range(nz):
+                cell_id = (cx * ny + cy) * nz + cz
+                a0 = offsets[cell_id]
+                a1 = offsets[cell_id + 1]
+
+                # Within-cell pairs
+                for ia in range(a0, a1):
+                    i = order[ia]
+                    for ja in range(ia + 1, a1):
+                        j = order[ja]
+                        dx = positions[i, 0] - positions[j, 0]
+                        dy = positions[i, 1] - positions[j, 1]
+                        dz = positions[i, 2] - positions[j, 2]
+                        if is_periodic_x:
+                            if dx > half_x:
+                                dx -= box_x
+                            elif dx < -half_x:
+                                dx += box_x
+                        if is_periodic_y:
+                            if dy > half_y:
+                                dy -= box_y
+                            elif dy < -half_y:
+                                dy += box_y
+                        if is_periodic_z:
+                            if dz > half_z:
+                                dz -= box_z
+                            elif dz < -half_z:
+                                dz += box_z
+                        if dx * dx + dy * dy + dz * dz <= ll2:
+                            union_nodes_by_size(parent, sizes, i, j)
+
+                # Neighbor offsets set (13 forward neighbors), enumerated explicitly
+                for t in range(13):
+                    if t == 0:
+                        dx_off, dy_off, dz_off = 1, 0, 0
+                    elif t == 1:
+                        dx_off, dy_off, dz_off = 0, 1, 0
+                    elif t == 2:
+                        dx_off, dy_off, dz_off = 1, 1, 0
+                    elif t == 3:
+                        dx_off, dy_off, dz_off = -1, 1, 0
+                    elif t == 4:
+                        dx_off, dy_off, dz_off = -1, -1, 1
+                    elif t == 5:
+                        dx_off, dy_off, dz_off = 0, -1, 1
+                    elif t == 6:
+                        dx_off, dy_off, dz_off = 1, -1, 1
+                    elif t == 7:
+                        dx_off, dy_off, dz_off = -1, 0, 1
+                    elif t == 8:
+                        dx_off, dy_off, dz_off = 0, 0, 1
+                    elif t == 9:
+                        dx_off, dy_off, dz_off = 1, 0, 1
+                    elif t == 10:
+                        dx_off, dy_off, dz_off = -1, 1, 1
+                    elif t == 11:
+                        dx_off, dy_off, dz_off = 0, 1, 1
+                    else:
+                        dx_off, dy_off, dz_off = 1, 1, 1
+
+                    nx_idx = cx + dx_off
+                    ny_idx = cy + dy_off
+                    nz_idx = cz + dz_off
+                    if is_periodic_x:
+                        if nx_idx < 0:
+                            nx_idx += nx
+                        elif nx_idx >= nx:
+                            nx_idx -= nx
+                    else:
+                        if nx_idx < 0 or nx_idx >= nx:
+                            continue
+                    if is_periodic_y:
+                        if ny_idx < 0:
+                            ny_idx += ny
+                        elif ny_idx >= ny:
+                            ny_idx -= ny
+                    else:
+                        if ny_idx < 0 or ny_idx >= ny:
+                            continue
+                    if is_periodic_z:
+                        if nz_idx < 0:
+                            nz_idx += nz
+                        elif nz_idx >= nz:
+                            nz_idx -= nz
+                    else:
+                        if nz_idx < 0 or nz_idx >= nz:
+                            continue
+
+                    nb_id = (nx_idx * ny + ny_idx) * nz + nz_idx
+                    b0 = offsets[nb_id]
+                    b1 = offsets[nb_id + 1]
+                    for ia in range(a0, a1):
+                        i = order[ia]
+                        for jb in range(b0, b1):
+                            j = order[jb]
+                            dx = positions[i, 0] - positions[j, 0]
+                            dy = positions[i, 1] - positions[j, 1]
+                            dz = positions[i, 2] - positions[j, 2]
+                            if is_periodic_x:
+                                if dx > half_x:
+                                    dx -= box_x
+                                elif dx < -half_x:
+                                    dx += box_x
+                            if is_periodic_y:
+                                if dy > half_y:
+                                    dy -= box_y
+                                elif dy < -half_y:
+                                    dy += box_y
+                            if is_periodic_z:
+                                if dz > half_z:
+                                    dz -= box_z
+                                elif dz < -half_z:
+                                    dz += box_z
+                            if dx * dx + dy * dy + dz * dz <= ll2:
+                                union_nodes_by_size(parent, sizes, i, j)
 
 
 ##########################################################################################
@@ -388,24 +529,12 @@ def fof_2d(positions, linking_length, box_size, boundary_conditions, min_cluster
     if n_particles == 0:
         return np.empty(0, dtype=type(min_cluster_size))
     
-    # Estimate maximum possible edges
-    max_edges = (n_particles * (n_particles - 1)) // 2
-    
-    # For large datasets, limit to reasonable maximum
-    if max_edges > 10000000:  # 10M edges max
-        max_edges = 10000000
-    
-    # Use optimized neighbor finding (Phase 5)
-    edges_i, edges_j = find_neighbors_2d_optimized(positions, linking_length, box_size, boundary_conditions, max_edges)
-    
-    # Build clusters using Union-Find
+    # Build clusters using Union-Find (with sizes for union-by-size)
     parent = np.arange(n_particles, dtype=type(min_cluster_size))
-    
-    # Process all edges
-    for k in range(len(edges_i)):
-        i = edges_i[k]
-        j = edges_j[k]
-        union_nodes(parent, i, j)
+    sizes = np.ones(n_particles, dtype=type(min_cluster_size))
+
+    # Cell-list neighbor search with unions on the fly
+    find_neighbors_2d_celllist_union(positions, linking_length, box_size, boundary_conditions, parent, sizes)
     
     # Assign final cluster labels
     cluster_labels = np.full(n_particles, -1, dtype=type(min_cluster_size))
@@ -442,24 +571,12 @@ def fof_3d(positions, linking_length, box_size, boundary_conditions, min_cluster
     if n_particles == 0:
         return np.empty(0, dtype=type(min_cluster_size))
     
-    # Estimate maximum possible edges
-    max_edges = (n_particles * (n_particles - 1)) // 2
-    
-    # For large datasets, limit to reasonable maximum
-    if max_edges > 10000000:  # 10M edges max
-        max_edges = 10000000
-    
-    # Use optimized neighbor finding (Phase 5)
-    edges_i, edges_j = find_neighbors_3d_optimized(positions, linking_length, box_size, boundary_conditions, max_edges)
-    
-    # Build clusters using Union-Find
+    # Build clusters using Union-Find (with sizes for union-by-size)
     parent = np.arange(n_particles, dtype=type(min_cluster_size))
-    
-    # Process all edges
-    for k in range(len(edges_i)):
-        i = edges_i[k]
-        j = edges_j[k]
-        union_nodes(parent, i, j)
+    sizes = np.ones(n_particles, dtype=type(min_cluster_size))
+
+    # Cell-list neighbor search with unions on the fly
+    find_neighbors_3d_celllist_union(positions, linking_length, box_size, boundary_conditions, parent, sizes)
     
     # Assign final cluster labels
     cluster_labels = np.full(n_particles, -1, dtype=type(min_cluster_size))
@@ -484,3 +601,4 @@ def fof_3d(positions, linking_length, box_size, boundary_conditions, min_cluster
     
     return cluster_labels
 
+ 
