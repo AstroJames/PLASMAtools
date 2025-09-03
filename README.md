@@ -97,3 +97,19 @@ All FFTS multithreaded with `pyfftw` backend, but fall back to `numpy` if `pyfft
 
 ## Critial point analysis
 * o and x point detector based on vector potential / stream function. Only works in 2D. 
+
+## Clustering and morphology (new)
+Friends-of-Friends (FOF) and grid-connected clustering for identifying coherent structures such as supernova bubbles or hot regions. The implementation uses efficient sparse connected-components for grid data and Numba-optimized kernels for particle FOF.
+
+- Features: 2D/3D support, periodic/Neumann/Dirichlet BCs, morphology filtering to remove thin shells, optional splitting of merged components, and robust cluster radii via circular means on periodic axes.
+- API: `PLASMAtools.funcs.clustering.ClusteringOperations`
+- Quick start (grid mode):
+  - `from PLASMAtools.funcs.clustering import ClusteringOperations, PERIODIC, NEUMANN`
+  - `ops = ClusteringOperations(num_of_dims=3, precision='float32')`
+  - `res = ops.cluster_3d_field(field=temperature, threshold=-1.5, threshold_type='greater', grid_spacing=1.0, morphological_filter=True, min_thickness=2, min_cluster_size=500, method='grid', connectivity=26, boundary_conditions=np.array([PERIODIC, PERIODIC, NEUMANN], dtype=np.int32), return_field=True)`
+  - Properties are in `res['properties']` with `cluster_sizes`, `cluster_centers`, and `cluster_radii`.
+- Quick start (FOF on positions):
+  - `labels = ops.friends_of_friends(positions, linking_length=0.2, box_size=[Lx, Ly, Lz], boundary_conditions=[PERIODIC, PERIODIC, NEUMANN], min_cluster_size=10)`
+  - `props = ops.get_cluster_properties(positions, labels, box_size=[Lx, Ly, Lz], boundary_conditions=[PERIODIC, PERIODIC, NEUMANN])`
+
+See `PLASMAtools/funcs/clustering/examples/main_grid_demo.py` for an end-to-end example with caching and visualization.
