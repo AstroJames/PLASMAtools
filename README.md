@@ -27,7 +27,7 @@ Data conventions
 - Threading: control Numba threads with `NUMBA_NUM_THREADS` env var.
 
 ## Read I/O:
-* BHAC (tested in 2.5D)
+* BHAC (tested in 2.5D) — reads native AMR output and efficiently interpolates to a uniform grid using linear interpolation accelerated with Numba and a KD‑tree (pykdtree)
 * FLASH (any D)
 * RAMSES (only tested in 3D)
 * AthenaK (planned).
