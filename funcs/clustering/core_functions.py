@@ -5,7 +5,7 @@ These are the performance-critical numerical kernels optimized for speed.
 Author: James R. Beattie
 """
 import numpy as np
-from numba import njit, types
+from numba import njit, types, prange
 from .constants import *
 
 ##########################################################################################
@@ -768,3 +768,133 @@ def ccl_occupied_voxels_3d(occupied_lin, counts_pts, dims, boundary_conditions, 
         comp_sizes_pts[cid] = total_pts
 
     return voxel_labels, comp_sizes_pts, n_comp
+
+##########################################################################################
+# Numba-accelerated 3D morphology (boolean) with periodic/non-periodic boundaries
+##########################################################################################
+
+@njit(cache=True, nogil=True)
+def _erode1d_bool(line, radius, periodic):
+    n = line.size
+    w = 2 * radius + 1
+    if n == 0:
+        return line.copy()
+    # Build extended array with wrap (periodic) or zero padding (Neumann/Dirichlet)
+    ext_len = n + 2 * radius
+    ext = np.zeros(ext_len, dtype=np.uint8)
+    if periodic:
+        # copy with wrap-around
+        for i in range(ext_len):
+            j = i - radius
+            if j < 0:
+                j += n * ((-j) // n + 1)
+            j %= n
+            ext[i] = 1 if line[j] else 0
+    else:
+        for i in range(n):
+            ext[i + radius] = 1 if line[i] else 0
+    # Prefix sum
+    p = np.zeros(ext_len + 1, dtype=np.int64)
+    for i in range(ext_len):
+        p[i + 1] = p[i] + ext[i]
+    out = np.zeros(n, dtype=np.bool_)
+    # Window min == 1 iff sum == w
+    for i in range(n):
+        s = p[i + w] - p[i]
+        out[i] = (s == w)
+    return out
+
+@njit(cache=True, nogil=True)
+def _dilate1d_bool(line, radius, periodic):
+    n = line.size
+    w = 2 * radius + 1
+    if n == 0:
+        return line.copy()
+    # Build extended array with wrap (periodic) or zero padding
+    ext_len = n + 2 * radius
+    ext = np.zeros(ext_len, dtype=np.uint8)
+    if periodic:
+        for i in range(ext_len):
+            j = i - radius
+            if j < 0:
+                j += n * ((-j) // n + 1)
+            j %= n
+            ext[i] = 1 if line[j] else 0
+    else:
+        for i in range(n):
+            ext[i + radius] = 1 if line[i] else 0
+    # Prefix sum
+    p = np.zeros(ext_len + 1, dtype=np.int64)
+    for i in range(ext_len):
+        p[i + 1] = p[i] + ext[i]
+    out = np.zeros(n, dtype=np.bool_)
+    # Window max == 1 iff sum > 0
+    for i in range(n):
+        s = p[i + w] - p[i]
+        out[i] = (s > 0)
+    return out
+
+@njit(cache=True, nogil=True, parallel=True)
+def _erode3d_bool(src, radius, periodic_x, periodic_y, periodic_z):
+    nx, ny, nz = src.shape[0], src.shape[1], src.shape[2]
+    tmp1 = np.zeros((nx, ny, nz), dtype=np.bool_)
+    tmp2 = np.zeros((nx, ny, nz), dtype=np.bool_)
+    # Erode along X
+    for y in prange(ny):
+        for z in range(nz):
+            line = src[:, y, z]
+            tmp1[:, y, z] = _erode1d_bool(line, radius, periodic_x)
+    # Erode along Y
+    for x in prange(nx):
+        for z in range(nz):
+            line = tmp1[x, :, z]
+            tmp2[x, :, z] = _erode1d_bool(line, radius, periodic_y)
+    # Erode along Z
+    out = np.zeros((nx, ny, nz), dtype=np.bool_)
+    for x in prange(nx):
+        for y in range(ny):
+            line = tmp2[x, y, :]
+            out[x, y, :] = _erode1d_bool(line, radius, periodic_z)
+    return out
+
+@njit(cache=True, nogil=True, parallel=True)
+def _dilate3d_bool(src, radius, periodic_x, periodic_y, periodic_z):
+    nx, ny, nz = src.shape[0], src.shape[1], src.shape[2]
+    tmp1 = np.zeros((nx, ny, nz), dtype=np.bool_)
+    tmp2 = np.zeros((nx, ny, nz), dtype=np.bool_)
+    # Dilate along X
+    for y in prange(ny):
+        for z in range(nz):
+            line = src[:, y, z]
+            tmp1[:, y, z] = _dilate1d_bool(line, radius, periodic_x)
+    # Dilate along Y
+    for x in prange(nx):
+        for z in range(nz):
+            line = tmp1[x, :, z]
+            tmp2[x, :, z] = _dilate1d_bool(line, radius, periodic_y)
+    # Dilate along Z
+    out = np.zeros((nx, ny, nz), dtype=np.bool_)
+    for x in prange(nx):
+        for y in range(ny):
+            line = tmp2[x, y, :]
+            out[x, y, :] = _dilate1d_bool(line, radius, periodic_z)
+    return out
+
+@njit(cache=True, nogil=True)
+def morphology_open_close_3d_bool(mask, radius, op_code, periodic_axes):
+    """
+    3D boolean morphology with flat cubic structuring element of radius `radius`.
+    op_code: 0 -> opening (erode then dilate), 1 -> closing (dilate then erode).
+    periodic_axes: (3,) bools for periodic wrap per axis.
+    """
+    px = periodic_axes[0]
+    py = periodic_axes[1]
+    pz = periodic_axes[2]
+    if op_code == 0:
+        er = _erode3d_bool(mask, radius, px, py, pz)
+        dl = _dilate3d_bool(er, radius, px, py, pz)
+        return dl
+    else:
+        dl = _dilate3d_bool(mask, radius, px, py, pz)
+        er = _erode3d_bool(dl, radius, px, py, pz)
+        return er

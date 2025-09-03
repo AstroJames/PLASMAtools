@@ -597,7 +597,8 @@ class ClusteringOperations():
         min_thickness: int = 2,
         remove_small_objects_size: int = None,
         operation: str = 'open',
-        periodic_axes: tuple = None) -> np.ndarray:
+        periodic_axes: tuple = None,
+        engine: str = 'auto') -> np.ndarray:
         """
         Apply morphological filtering to remove thin shell-like features.
         
@@ -611,17 +612,29 @@ class ClusteringOperations():
             remove_small_objects_size: Minimum size for connected components.
                                       If None, uses min_thickness^ndim * 8
             operation: 'open' to remove thin links; 'close' to bridge small gaps
-            periodic_axes: tuple of booleans per axis; when True, wrap-pad that axis
-                           so morphology respects periodic boundaries
+            periodic_axes: tuple of booleans per axis; when True, treat that axis as periodic for morphology
+            engine: 'auto' (prefer numba if available), 'numba', or 'scipy'
         
         Returns:
             Filtered binary mask with thin structures removed
         """
-        try:
-            from scipy import ndimage
-        except ImportError:
-            print("Warning: scipy not available, skipping morphological filtering")
-            return mask
+        use_numba_engine = False
+        if engine == 'numba' or (engine == 'auto' and self.use_numba and mask.ndim == 3):
+            use_numba_engine = True
+        
+        if not use_numba_engine:
+            try:
+                from scipy import ndimage
+            except ImportError:
+                if engine == 'scipy':
+                    print("Warning: scipy not available, skipping morphological filtering")
+                    return mask
+                # Fallback to numba engine if scipy missing and dimensions supported
+                if mask.ndim == 3:
+                    use_numba_engine = True
+                else:
+                    print("Warning: scipy not available and numba engine only implemented for 3D; skipping morphology")
+                    return mask
         
         ndim = mask.ndim
         if ndim not in [2, 3]:
@@ -631,48 +644,64 @@ class ClusteringOperations():
         if original_count == 0:
             return mask
         
-        # Generate structuring element for morphological operations
-        # Use connectivity=1 (4-conn in 2D, 6-conn in 3D) for more aggressive filtering
-        structure = ndimage.generate_binary_structure(ndim, connectivity=1)
-        
-        # Optional periodic padding so morphology respects wrap-around connectivity
-        if periodic_axes is None:
-            periodic_axes = tuple([False] * ndim)
-        pad_n = max(1, int(min_thickness)) if min_thickness > 0 else 1
-        pad_spec = []
-        for ax in range(ndim):
-            if periodic_axes[ax]:
-                pad_spec.append((pad_n, pad_n))
-            else:
-                pad_spec.append((0, 0))
-        if any(pw[0] > 0 or pw[1] > 0 for pw in pad_spec):
-            mask_work = np.pad(mask, pad_spec, mode='wrap')
+        if use_numba_engine:
+            if periodic_axes is None:
+                periodic_axes = tuple([False] * ndim)
+            from .core_functions import morphology_open_close_3d_bool
+            radius = max(0, int(min_thickness))
+            op_code = 0 if operation != 'close' else 1
+            mask_morph = morphology_open_close_3d_bool(mask.astype(np.bool_), radius, op_code, np.array(periodic_axes, dtype=np.bool_))
+            # No padding used; periodic handled in-kernel
+            mask_work = mask  # for consistency below
+            pad_spec = [(0,0)] * ndim
         else:
-            mask_work = mask.copy()
-
-        # Step 1: Morphological operation
-        # 'open' removes thin connections; 'close' bridges small gaps
-        if operation == 'close':
-            if min_thickness > 0:
-                mask_morph = ndimage.binary_closing(
-                    mask_work,
-                    structure=structure,
-                    iterations=min_thickness
-                )
+            # Generate structuring element for morphological operations
+            # Use connectivity=1 (4-conn in 2D, 6-conn in 3D) for more aggressive filtering
+            from scipy import ndimage
+            structure = ndimage.generate_binary_structure(ndim, connectivity=1)
+            
+            # Optional periodic padding so morphology respects wrap-around connectivity
+            if periodic_axes is None:
+                periodic_axes = tuple([False] * ndim)
+            pad_n = max(1, int(min_thickness)) if min_thickness > 0 else 1
+            pad_spec = []
+            for ax in range(ndim):
+                if periodic_axes[ax]:
+                    pad_spec.append((pad_n, pad_n))
+                else:
+                    pad_spec.append((0, 0))
+            if any(pw[0] > 0 or pw[1] > 0 for pw in pad_spec):
+                mask_work = np.pad(mask, pad_spec, mode='wrap')
             else:
-                mask_morph = mask_work.copy()
-        else:  # 'open' (default)
-            if min_thickness > 0:
-                mask_morph = ndimage.binary_opening(
-                    mask_work,
-                    structure=structure,
-                    iterations=min_thickness
-                )
-            else:
-                mask_morph = mask_work.copy()
+                mask_work = mask.copy()
 
-        # Step 2: Fill small holes to maintain bulk structure
-        mask_filled = ndimage.binary_fill_holes(mask_morph)
+            # Step 1: Morphological operation
+            # 'open' removes thin connections; 'close' bridges small gaps
+            if operation == 'close':
+                if min_thickness > 0:
+                    mask_morph = ndimage.binary_closing(
+                        mask_work,
+                        structure=structure,
+                        iterations=min_thickness
+                    )
+                else:
+                    mask_morph = mask_work.copy()
+            else:  # 'open' (default)
+                if min_thickness > 0:
+                    mask_morph = ndimage.binary_opening(
+                        mask_work,
+                        structure=structure,
+                        iterations=min_thickness
+                    )
+                else:
+                    mask_morph = mask_work.copy()
+
+        # Step 2: Fill small holes to maintain bulk structure (SciPy only)
+        try:
+            from scipy import ndimage
+            mask_filled = ndimage.binary_fill_holes(mask_morph)
+        except Exception:
+            mask_filled = mask_morph
         
         # Step 3: Remove small disconnected components
         if remove_small_objects_size is None:
@@ -680,17 +709,18 @@ class ClusteringOperations():
             remove_small_objects_size = (min_thickness ** ndim) * 8
         
         if remove_small_objects_size > 0:
-            # Label connected components
-            labeled, num_features = ndimage.label(mask_filled, structure=structure)
-            
-            if num_features > 0:
-                # Count size of each component
-                component_sizes = ndimage.sum(mask_filled, labeled, range(1, num_features + 1))
-                
-                # Remove small components
-                small_components = np.where(component_sizes < remove_small_objects_size)[0] + 1
-                for comp_id in small_components:
-                    mask_filled[labeled == comp_id] = False
+            try:
+                from scipy import ndimage
+                structure = ndimage.generate_binary_structure(ndim, connectivity=1)
+                labeled, num_features = ndimage.label(mask_filled, structure=structure)
+                if num_features > 0:
+                    component_sizes = ndimage.sum(mask_filled, labeled, range(1, num_features + 1))
+                    small_components = np.where(component_sizes < remove_small_objects_size)[0] + 1
+                    for comp_id in small_components:
+                        mask_filled[labeled == comp_id] = False
+            except Exception:
+                # If SciPy not available, skip size filtering
+                pass
         
         final_count = np.sum(mask_filled)
         removed_pixels = original_count - final_count
@@ -699,15 +729,18 @@ class ClusteringOperations():
             print(f"  Morphological filter removed {removed_pixels:,} pixels "
                   f"({100*removed_pixels/original_count:.1f}% of original)")
         
-        # Crop back if padded
-        if any(pw[0] > 0 or pw[1] > 0 for pw in pad_spec):
-            slices = []
-            for ax in range(ndim):
-                if periodic_axes[ax]:
-                    slices.append(slice(pad_spec[ax][0], mask_filled.shape[ax] - pad_spec[ax][1]))
-                else:
-                    slices.append(slice(0, mask_filled.shape[ax]))
-            mask_final = mask_filled[tuple(slices)]
+        # Crop back if padded (scipy path); numba path uses no padding
+        if not use_numba_engine:
+            if any(pw[0] > 0 or pw[1] > 0 for pw in pad_spec):
+                slices = []
+                for ax in range(ndim):
+                    if periodic_axes[ax]:
+                        slices.append(slice(pad_spec[ax][0], mask_filled.shape[ax] - pad_spec[ax][1]))
+                    else:
+                        slices.append(slice(0, mask_filled.shape[ax]))
+                mask_final = mask_filled[tuple(slices)]
+            else:
+                mask_final = mask_filled
         else:
             mask_final = mask_filled
         return mask_final
@@ -1866,55 +1899,45 @@ class ClusteringOperations():
         if periodic_axes is None:
             periodic_axes = (True, True, False) if self.num_of_dims == 3 else tuple([True]*self.num_of_dims)
 
-        # Prepare derived variables if requested
-        velocity = None
+        # Prepare derived variables (global, computed once on the full domain)
+        dvf = None
+        u_c = u_s = omega = baro = None
         if include_derived:
-            try:
-                vx = fields.get('vx'); vy = fields.get('vy'); vz = fields.get('vz')
-                if vx is not None and vy is not None and vz is not None:
-                    velocity = np.array([vx, vy, vz])
+            vx = fields.get('vx'); vy = fields.get('vy'); vz = fields.get('vz')
+            if (vx is not None and vy is not None and vz is not None):
+                try:
                     from PLASMAtools.funcs.derived_vars import DerivedVars as DV
                     dvf = DV()
+                    velocity = np.stack([vx, vy, vz]).astype(np.float32, copy=False)
+                    # Global Helmholtz decomposition
+                    u_c, u_s = dvf.helmholtz_decomposition(velocity)
+                    # Global vorticity/baroclinic terms if density and pressure are provided
                     density = fields.get('density')
                     pressure = fields.get('pressure')
                     if density is not None and pressure is not None:
                         omega, _c, _s, baro, _, _ = dvf.vorticity_decomp(
-                            velocity, density_scalar_field=np.array([density]), pressure_scalar_field=np.array([pressure])
+                            velocity,
+                            density_scalar_field=np.array([density]),
+                            pressure_scalar_field=np.array([pressure])
                         )
-                    else:
-                        omega = None; baro = None
-                    u_c, u_s = dvf.helmholtz_decomposition(velocity)
-                else:
-                    include_derived = False
-            except Exception as e:
-                print(f"Warning: failed to compute derived fields: {e}")
+                except Exception as e:
+                    print(f"Warning: failed to compute global derived fields: {e}")
+                    dvf = None
+                    u_c = u_s = omega = baro = None
+            else:
                 include_derived = False
 
         def extract_cube(field, cx, cy, cz, half):
-            cube = np.zeros((2*half, 2*half, 2*half), dtype=field.dtype)
             nx, ny, nz = dims
-            # X
+            # Build index arrays with boundary handling (periodic: wrap; Neumann: clamp)
             x_idx = np.arange(cx - half, cx + half)
-            x_wrapped = (x_idx % nx) if periodic_axes[0] else np.clip(x_idx, 0, nx-1)
-            # Y
             y_idx = np.arange(cy - half, cy + half)
-            y_wrapped = (y_idx % ny) if periodic_axes[1] else np.clip(y_idx, 0, ny-1)
-            # Z
             z_idx = np.arange(cz - half, cz + half)
-            if self.num_of_dims == 3 and periodic_axes[2]:
-                z_wrapped = z_idx % nz
-                for ix, xi in enumerate(x_wrapped):
-                    for iy, yi in enumerate(y_wrapped):
-                        cube[ix, iy, :] = field[xi, yi, z_wrapped]
-            else:
-                z_start = max(0, cz - half)
-                z_end = min(nz, cz + half)
-                z_cube_start = max(0, half - cz)
-                z_cube_end = 2*half - max(0, (cz + half) - nz)
-                for ix, xi in enumerate(x_wrapped):
-                    for iy, yi in enumerate(y_wrapped):
-                        cube[ix, iy, z_cube_start:z_cube_end] = field[xi, yi, z_start:z_end]
-            return cube
+            xi = (x_idx % nx) if periodic_axes[0] else np.clip(x_idx, 0, nx - 1)
+            yi = (y_idx % ny) if periodic_axes[1] else np.clip(y_idx, 0, ny - 1)
+            zi = (z_idx % nz) if (self.num_of_dims == 3 and periodic_axes[2]) else np.clip(z_idx, 0, nz - 1)
+            # Fancy indexing to extract cube in one shot
+            return field[np.ix_(xi, yi, zi)]
 
         n_clusters = int(props.get('n_clusters', 0))
         centers_vox = props.get('cluster_centers_vox', np.array([]).reshape(0, self.num_of_dims))
@@ -1942,12 +1965,13 @@ class ClusteringOperations():
                     cube = extract_cube(arr, cx, cy, cz, half)
                     grp.create_dataset(name, data=cube, compression=compression, compression_opts=compression_opts)
 
-                # Cluster mask
-                mask_cube = extract_cube((grid == i).astype(np.uint8), cx, cy, cz, half) > 0
+                # Cluster mask (avoid full-grid equality; slice first)
+                grid_cube = extract_cube(grid, cx, cy, cz, half)
+                mask_cube = (grid_cube == i)
                 grp.create_dataset('cluster_mask', data=mask_cube, compression=compression, compression_opts=compression_opts)
 
-                # Derived
-                if include_derived and velocity is not None:
+                # Derived (extract cubes from global arrays)
+                if include_derived and dvf is not None and u_c is not None and u_s is not None:
                     try:
                         ucx = extract_cube(u_c[0], cx, cy, cz, half); grp.create_dataset('u_cx', data=ucx, compression=compression, compression_opts=compression_opts)
                         ucy = extract_cube(u_c[1], cx, cy, cz, half); grp.create_dataset('u_cy', data=ucy, compression=compression, compression_opts=compression_opts)
@@ -1955,23 +1979,16 @@ class ClusteringOperations():
                         usx = extract_cube(u_s[0], cx, cy, cz, half); grp.create_dataset('u_sx', data=usx, compression=compression, compression_opts=compression_opts)
                         usy = extract_cube(u_s[1], cx, cy, cz, half); grp.create_dataset('u_sy', data=usy, compression=compression, compression_opts=compression_opts)
                         usz = extract_cube(u_s[2], cx, cy, cz, half); grp.create_dataset('u_sz', data=usz, compression=compression, compression_opts=compression_opts)
-                        if 'density' in fields and 'pressure' in fields:
-                            from PLASMAtools.funcs.derived_vars import DerivedVars as DV
-                            dvf = DV()
-                            try:
-                                _ = omega  # try reuse if defined
-                            except NameError:
-                                omega, _c, _s, baro, _, _ = dvf.vorticity_decomp(
-                                    velocity, density_scalar_field=np.array([fields['density']]), pressure_scalar_field=np.array([fields['pressure']])
-                                )
+                        if omega is not None:
                             ox = extract_cube(omega[0], cx, cy, cz, half); grp.create_dataset('omega_x', data=ox, compression=compression, compression_opts=compression_opts)
                             oy = extract_cube(omega[1], cx, cy, cz, half); grp.create_dataset('omega_y', data=oy, compression=compression, compression_opts=compression_opts)
                             oz = extract_cube(omega[2], cx, cy, cz, half); grp.create_dataset('omega_z', data=oz, compression=compression, compression_opts=compression_opts)
-                            om = np.sqrt(ox**2 + oy**2 + oz**2); grp.create_dataset('omega_mag', data=om, compression=compression, compression_opts=compression_opts)
+                            om = np.sqrt(ox**2 + oy**2 + oz**2).astype(np.float32); grp.create_dataset('omega_mag', data=om, compression=compression, compression_opts=compression_opts)
+                        if baro is not None:
                             bx = extract_cube(baro[0], cx, cy, cz, half); grp.create_dataset('baro_x', data=bx, compression=compression, compression_opts=compression_opts)
                             by = extract_cube(baro[1], cx, cy, cz, half); grp.create_dataset('baro_y', data=by, compression=compression, compression_opts=compression_opts)
                             bz = extract_cube(baro[2], cx, cy, cz, half); grp.create_dataset('baro_z', data=bz, compression=compression, compression_opts=compression_opts)
-                            bm = np.sqrt(bx**2 + by**2 + bz**2); grp.create_dataset('baro_mag', data=bm, compression=compression, compression_opts=compression_opts)
+                            bm = np.sqrt(bx**2 + by**2 + bz**2).astype(np.float32); grp.create_dataset('baro_mag', data=bm, compression=compression, compression_opts=compression_opts)
                     except Exception as e:
                         print(f"Warning: failed to save derived cubes for cluster {i}: {e}")
 
