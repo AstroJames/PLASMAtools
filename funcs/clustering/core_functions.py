@@ -601,4 +601,170 @@ def fof_3d(positions, linking_length, box_size, boundary_conditions, min_cluster
     
     return cluster_labels
 
- 
+##########################################################################################
+# Sparse voxel connected components for friends_of_friends_grid
+##########################################################################################
+
+@njit(cache=True, nogil=True)
+def _next_pow2(n):
+    m = 1
+    while m < n:
+        m <<= 1
+    return m
+
+@njit(cache=True, nogil=True)
+def _build_hash_int64(keys):
+    """
+    Build an open-addressing hash for int64 keys -> index (0..N-1).
+    Returns (hkeys, hvals, capacity).
+    """
+    n = keys.size
+    cap = _next_pow2(max(8, n * 2))
+    hkeys = -np.ones(cap, dtype=np.int64)
+    hvals = -np.ones(cap, dtype=np.int64)
+    for i in range(n):
+        k = keys[i]
+        # Simple multiplicative hash then modulo power-of-two capacity
+        idx = int((k * 11400714819323198485) & (cap - 1))
+        # Linear probing
+        while True:
+            if hkeys[idx] == -1:
+                hkeys[idx] = k
+                hvals[idx] = i
+                break
+            elif hkeys[idx] == k:
+                # Already inserted (keys are unique); nothing to do
+                break
+            idx = (idx + 1) & (cap - 1)
+    return hkeys, hvals, cap
+
+@njit(cache=True, nogil=True)
+def _hash_get_int64(hkeys, hvals, cap, key):
+    if cap == 0:
+        return -1
+    idx = int((key * 11400714819323198485) & (cap - 1))
+    k = hkeys[idx]
+    if k == -1:
+        return -1
+    if k == key:
+        return hvals[idx]
+    # Probe
+    start = idx
+    while True:
+        idx = (idx + 1) & (cap - 1)
+        k = hkeys[idx]
+        if k == -1:
+            return -1
+        if k == key:
+            return hvals[idx]
+        if idx == start:
+            return -1
+
+@njit(cache=True, nogil=True)
+def ccl_occupied_voxels_3d(occupied_lin, counts_pts, dims, boundary_conditions, connectivity):
+    """
+    Connected-component labeling over occupied voxels represented by linear indices.
+
+    Args:
+        occupied_lin: (M,) int64 unique sorted/unsorted voxel linear indices where occupancy >= threshold
+        counts_pts: (M,) int64 number of points per occupied voxel
+        dims: (3,) int64 array of grid dimensions
+        boundary_conditions: (3,) int32 array (PERIODIC/NEUMANN/DIRICHLET)
+        connectivity: 6, 18, or 26
+
+    Returns:
+        voxel_labels: (M,) int64 component id per occupied voxel (0..K-1)
+        comp_sizes_pts: (K_max,) int64 total points per component (first n_comp entries valid)
+        n_comp: int64 number of components
+    """
+    M = occupied_lin.size
+    voxel_labels = -np.ones(M, dtype=np.int64)
+    comp_sizes_pts = np.zeros(max(1, M), dtype=np.int64)
+    n_comp = 0
+    if M == 0:
+        return voxel_labels, comp_sizes_pts, 0
+
+    # Build hash for membership queries
+    hkeys, hvals, cap = _build_hash_int64(occupied_lin)
+
+    dims0 = int(dims[0]); dims1 = int(dims[1]); dims2 = int(dims[2])
+    is_per_x = boundary_conditions[0] == PERIODIC
+    is_per_y = boundary_conditions[1] == PERIODIC
+    is_per_z = boundary_conditions[2] == PERIODIC
+
+    # BFS queue
+    q = np.empty(M, dtype=np.int64)
+
+    for start in range(M):
+        if voxel_labels[start] != -1:
+            continue
+        # Start new component
+        cid = n_comp
+        n_comp += 1
+        head = 0
+        tail = 0
+        voxel_labels[start] = cid
+        q[tail] = start
+        tail += 1
+        total_pts = 0
+
+        while head < tail:
+            vi = q[head]
+            head += 1
+            total_pts += counts_pts[vi]
+
+            vlin = occupied_lin[vi]
+            x = int(vlin // (dims1 * dims2))
+            rem = int(vlin % (dims1 * dims2))
+            y = int(rem // dims2)
+            z = int(rem % dims2)
+
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        if dx == 0 and dy == 0 and dz == 0:
+                            continue
+                        if connectivity == 6:
+                            if abs(dx) + abs(dy) + abs(dz) != 1:
+                                continue
+                        elif connectivity == 18:
+                            if abs(dx) + abs(dy) + abs(dz) > 2:
+                                continue
+                        # Neighbor coordinates with BCs
+                        nx = x + dx
+                        ny = y + dy
+                        nz = z + dz
+                        if is_per_x:
+                            if nx < 0:
+                                nx += dims0
+                            elif nx >= dims0:
+                                nx -= dims0
+                        else:
+                            if nx < 0 or nx >= dims0:
+                                continue
+                        if is_per_y:
+                            if ny < 0:
+                                ny += dims1
+                            elif ny >= dims1:
+                                ny -= dims1
+                        else:
+                            if ny < 0 or ny >= dims1:
+                                continue
+                        if is_per_z:
+                            if nz < 0:
+                                nz += dims2
+                            elif nz >= dims2:
+                                nz -= dims2
+                        else:
+                            if nz < 0 or nz >= dims2:
+                                continue
+                        nlin = (nx * dims1 + ny) * dims2 + nz
+                        ni = _hash_get_int64(hkeys, hvals, cap, nlin)
+                        if ni != -1 and voxel_labels[ni] == -1:
+                            voxel_labels[ni] = cid
+                            q[tail] = ni
+                            tail += 1
+
+        comp_sizes_pts[cid] = total_pts
+
+    return voxel_labels, comp_sizes_pts, n_comp
