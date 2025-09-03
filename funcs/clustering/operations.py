@@ -9,6 +9,7 @@ Author: James R. Beattie
 """
 
 import numpy as np
+import os
 from .constants import *
 from .core_functions import *
 
@@ -1865,12 +1866,13 @@ class ClusteringOperations():
                            cube_size: int = 64,
                            periodic_axes: tuple = None,
                            include_derived: bool = True,
-                           compression: str = 'gzip', compression_opts: int = 4) -> str:
+                           compression: str = 'gzip', compression_opts: int = 4,
+                           separate_files: bool = False) -> str | list:
         """
         Save per-cluster local cubes around cluster centers to an HDF5 file.
 
         Args:
-            filename_base: Base path (without .h5) used for output file name.
+            filename_base: Base path (without .h5). If separate_files=False, output is '<base>_cubes.h5'. If True, outputs '<base>_cluster_XX.h5'.
             results: dict from cluster_3d_field (must include 'cluster_field' and 'properties').
             fields: mapping of name -> 3D ndarray (e.g., temperature, density, pressure, vx, vy, vz).
             cube_size: side length of cube (voxels, even enforced).
@@ -1878,6 +1880,7 @@ class ClusteringOperations():
             include_derived: if True, compute and store u_c/u_s modes and vorticity/baroclinic cubes.
             compression: HDF5 compression algorithm.
             compression_opts: compression level for gzip.
+            separate_files: if True, write one HDF5 per cluster. Otherwise, write a single file with groups per cluster.
 
         Returns:
             Output HDF5 filepath.
@@ -1909,17 +1912,21 @@ class ClusteringOperations():
                     from PLASMAtools.funcs.derived_vars import DerivedVars as DV
                     dvf = DV()
                     velocity = np.stack([vx, vy, vz]).astype(np.float32, copy=False)
+                    print(f"Computing global Helmholtz decomposition (velocity shape={velocity.shape}) ...")
                     # Global Helmholtz decomposition
                     u_c, u_s = dvf.helmholtz_decomposition(velocity)
+                    print("  Helmholtz decomposition complete: u_c, u_s computed.")
                     # Global vorticity/baroclinic terms if density and pressure are provided
                     density = fields.get('density')
                     pressure = fields.get('pressure')
                     if density is not None and pressure is not None:
+                        print(f"Computing global vorticity/baroclinic terms (density/pressure shape={density.shape}) ...")
                         omega, _c, _s, baro, _, _ = dvf.vorticity_decomp(
                             velocity,
                             density_scalar_field=np.array([density]),
                             pressure_scalar_field=np.array([pressure])
                         )
+                        print("  Vorticity/baroclinic computation complete.")
                 except Exception as e:
                     print(f"Warning: failed to compute global derived fields: {e}")
                     dvf = None
@@ -1948,48 +1955,95 @@ class ClusteringOperations():
             cube_size += 1
         half = cube_size // 2
 
-        with h5py.File(out_path, 'w') as hf:
-            hf.attrs['n_clusters'] = n_clusters
-            hf.attrs['cube_size'] = cube_size
-            hf.attrs['fields'] = ','.join(fields.keys())
+        if not separate_files:
+            with h5py.File(out_path, 'w') as hf:
+                hf.attrs['n_clusters'] = n_clusters
+                hf.attrs['cube_size'] = cube_size
+                hf.attrs['fields'] = ','.join(fields.keys())
 
+                for i in range(n_clusters):
+                    grp = hf.create_group(f'cluster_{i:02d}')
+                    cx, cy, cz = centers_vox[i]
+                    cx = int(round(float(cx))); cy = int(round(float(cy))); cz = int(round(float(cz)))
+
+                    # Base fields
+                    for name, arr in fields.items():
+                        if arr is None:
+                            continue
+                        cube = extract_cube(arr, cx, cy, cz, half)
+                        grp.create_dataset(name, data=cube, compression=compression, compression_opts=compression_opts)
+
+                    # Cluster mask (avoid full-grid equality; slice first)
+                    grid_cube = extract_cube(grid, cx, cy, cz, half)
+                    mask_cube = (grid_cube == i)
+                    grp.create_dataset('cluster_mask', data=mask_cube, compression=compression, compression_opts=compression_opts)
+
+                    # Derived (extract cubes from global arrays)
+                    if include_derived and dvf is not None and u_c is not None and u_s is not None:
+                        try:
+                            ucx = extract_cube(u_c[0], cx, cy, cz, half); grp.create_dataset('u_cx', data=ucx, compression=compression, compression_opts=compression_opts)
+                            ucy = extract_cube(u_c[1], cx, cy, cz, half); grp.create_dataset('u_cy', data=ucy, compression=compression, compression_opts=compression_opts)
+                            ucz = extract_cube(u_c[2], cx, cy, cz, half); grp.create_dataset('u_cz', data=ucz, compression=compression, compression_opts=compression_opts)
+                            usx = extract_cube(u_s[0], cx, cy, cz, half); grp.create_dataset('u_sx', data=usx, compression=compression, compression_opts=compression_opts)
+                            usy = extract_cube(u_s[1], cx, cy, cz, half); grp.create_dataset('u_sy', data=usy, compression=compression, compression_opts=compression_opts)
+                            usz = extract_cube(u_s[2], cx, cy, cz, half); grp.create_dataset('u_sz', data=usz, compression=compression, compression_opts=compression_opts)
+                            if omega is not None:
+                                ox = extract_cube(omega[0], cx, cy, cz, half); grp.create_dataset('omega_x', data=ox, compression=compression, compression_opts=compression_opts)
+                                oy = extract_cube(omega[1], cx, cy, cz, half); grp.create_dataset('omega_y', data=oy, compression=compression, compression_opts=compression_opts)
+                                oz = extract_cube(omega[2], cx, cy, cz, half); grp.create_dataset('omega_z', data=oz, compression=compression, compression_opts=compression_opts)
+                                om = np.sqrt(ox**2 + oy**2 + oz**2).astype(np.float32); grp.create_dataset('omega_mag', data=om, compression=compression, compression_opts=compression_opts)
+                            if baro is not None:
+                                bx = extract_cube(baro[0], cx, cy, cz, half); grp.create_dataset('baro_x', data=bx, compression=compression, compression_opts=compression_opts)
+                                by = extract_cube(baro[1], cx, cy, cz, half); grp.create_dataset('baro_y', data=by, compression=compression, compression_opts=compression_opts)
+                                bz = extract_cube(baro[2], cx, cy, cz, half); grp.create_dataset('baro_z', data=bz, compression=compression, compression_opts=compression_opts)
+                                bm = np.sqrt(bx**2 + by**2 + bz**2).astype(np.float32); grp.create_dataset('baro_mag', data=bm, compression=compression, compression_opts=compression_opts)
+                        except Exception as e:
+                            print(f"Warning: failed to save derived cubes for cluster {i}: {e}")
+            return out_path
+        else:
+            out_paths = []
             for i in range(n_clusters):
-                grp = hf.create_group(f'cluster_{i:02d}')
-                cx, cy, cz = centers_vox[i]
-                cx = int(round(float(cx))); cy = int(round(float(cy))); cz = int(round(float(cz)))
+                file_i = f"{os.path.splitext(filename_base)[0]}_cluster_{i:02d}.h5" if not filename_base.endswith('.h5') else filename_base.replace('.h5', f'_cluster_{i:02d}.h5')
+                with h5py.File(file_i, 'w') as hf:
+                    hf.attrs['cluster_id'] = i
+                    hf.attrs['cube_size'] = cube_size
+                    hf.attrs['fields'] = ','.join(fields.keys())
+                    cx, cy, cz = centers_vox[i]
+                    cx = int(round(float(cx))); cy = int(round(float(cy))); cz = int(round(float(cz)))
+                    hf.attrs['center_vox'] = (cx, cy, cz)
 
-                # Base fields
-                for name, arr in fields.items():
-                    if arr is None:
-                        continue
-                    cube = extract_cube(arr, cx, cy, cz, half)
-                    grp.create_dataset(name, data=cube, compression=compression, compression_opts=compression_opts)
+                    # Base fields
+                    for name, arr in fields.items():
+                        if arr is None:
+                            continue
+                        cube = extract_cube(arr, cx, cy, cz, half)
+                        hf.create_dataset(name, data=cube, compression=compression, compression_opts=compression_opts)
 
-                # Cluster mask (avoid full-grid equality; slice first)
-                grid_cube = extract_cube(grid, cx, cy, cz, half)
-                mask_cube = (grid_cube == i)
-                grp.create_dataset('cluster_mask', data=mask_cube, compression=compression, compression_opts=compression_opts)
+                    # Cluster mask
+                    grid_cube = extract_cube(grid, cx, cy, cz, half)
+                    mask_cube = (grid_cube == i)
+                    hf.create_dataset('cluster_mask', data=mask_cube, compression=compression, compression_opts=compression_opts)
 
-                # Derived (extract cubes from global arrays)
-                if include_derived and dvf is not None and u_c is not None and u_s is not None:
-                    try:
-                        ucx = extract_cube(u_c[0], cx, cy, cz, half); grp.create_dataset('u_cx', data=ucx, compression=compression, compression_opts=compression_opts)
-                        ucy = extract_cube(u_c[1], cx, cy, cz, half); grp.create_dataset('u_cy', data=ucy, compression=compression, compression_opts=compression_opts)
-                        ucz = extract_cube(u_c[2], cx, cy, cz, half); grp.create_dataset('u_cz', data=ucz, compression=compression, compression_opts=compression_opts)
-                        usx = extract_cube(u_s[0], cx, cy, cz, half); grp.create_dataset('u_sx', data=usx, compression=compression, compression_opts=compression_opts)
-                        usy = extract_cube(u_s[1], cx, cy, cz, half); grp.create_dataset('u_sy', data=usy, compression=compression, compression_opts=compression_opts)
-                        usz = extract_cube(u_s[2], cx, cy, cz, half); grp.create_dataset('u_sz', data=usz, compression=compression, compression_opts=compression_opts)
-                        if omega is not None:
-                            ox = extract_cube(omega[0], cx, cy, cz, half); grp.create_dataset('omega_x', data=ox, compression=compression, compression_opts=compression_opts)
-                            oy = extract_cube(omega[1], cx, cy, cz, half); grp.create_dataset('omega_y', data=oy, compression=compression, compression_opts=compression_opts)
-                            oz = extract_cube(omega[2], cx, cy, cz, half); grp.create_dataset('omega_z', data=oz, compression=compression, compression_opts=compression_opts)
-                            om = np.sqrt(ox**2 + oy**2 + oz**2).astype(np.float32); grp.create_dataset('omega_mag', data=om, compression=compression, compression_opts=compression_opts)
-                        if baro is not None:
-                            bx = extract_cube(baro[0], cx, cy, cz, half); grp.create_dataset('baro_x', data=bx, compression=compression, compression_opts=compression_opts)
-                            by = extract_cube(baro[1], cx, cy, cz, half); grp.create_dataset('baro_y', data=by, compression=compression, compression_opts=compression_opts)
-                            bz = extract_cube(baro[2], cx, cy, cz, half); grp.create_dataset('baro_z', data=bz, compression=compression, compression_opts=compression_opts)
-                            bm = np.sqrt(bx**2 + by**2 + bz**2).astype(np.float32); grp.create_dataset('baro_mag', data=bm, compression=compression, compression_opts=compression_opts)
-                    except Exception as e:
-                        print(f"Warning: failed to save derived cubes for cluster {i}: {e}")
-
-        return out_path
+                    # Derived
+                    if include_derived and dvf is not None and u_c is not None and u_s is not None:
+                        try:
+                            ucx = extract_cube(u_c[0], cx, cy, cz, half); hf.create_dataset('u_cx', data=ucx, compression=compression, compression_opts=compression_opts)
+                            ucy = extract_cube(u_c[1], cx, cy, cz, half); hf.create_dataset('u_cy', data=ucy, compression=compression, compression_opts=compression_opts)
+                            ucz = extract_cube(u_c[2], cx, cy, cz, half); hf.create_dataset('u_cz', data=ucz, compression=compression, compression_opts=compression_opts)
+                            usx = extract_cube(u_s[0], cx, cy, cz, half); hf.create_dataset('u_sx', data=usx, compression=compression, compression_opts=compression_opts)
+                            usy = extract_cube(u_s[1], cx, cy, cz, half); hf.create_dataset('u_sy', data=usy, compression=compression, compression_opts=compression_opts)
+                            usz = extract_cube(u_s[2], cx, cy, cz, half); hf.create_dataset('u_sz', data=usz, compression=compression, compression_opts=compression_opts)
+                            if omega is not None:
+                                ox = extract_cube(omega[0], cx, cy, cz, half); hf.create_dataset('omega_x', data=ox, compression=compression, compression_opts=compression_opts)
+                                oy = extract_cube(omega[1], cx, cy, cz, half); hf.create_dataset('omega_y', data=oy, compression=compression, compression_opts=compression_opts)
+                                oz = extract_cube(omega[2], cx, cy, cz, half); hf.create_dataset('omega_z', data=oz, compression=compression, compression_opts=compression_opts)
+                                om = np.sqrt(ox**2 + oy**2 + oz**2).astype(np.float32); hf.create_dataset('omega_mag', data=om, compression=compression, compression_opts=compression_opts)
+                            if baro is not None:
+                                bx = extract_cube(baro[0], cx, cy, cz, half); hf.create_dataset('baro_x', data=bx, compression=compression, compression_opts=compression_opts)
+                                by = extract_cube(baro[1], cx, cy, cz, half); hf.create_dataset('baro_y', data=by, compression=compression, compression_opts=compression_opts)
+                                bz = extract_cube(baro[2], cx, cy, cz, half); hf.create_dataset('baro_z', data=bz, compression=compression, compression_opts=compression_opts)
+                                bm = np.sqrt(bx**2 + by**2 + bz**2).astype(np.float32); hf.create_dataset('baro_mag', data=bm, compression=compression, compression_opts=compression_opts)
+                        except Exception as e:
+                            print(f"Warning: failed to save derived cubes for cluster {i}: {e}")
+                out_paths.append(file_i)
+            return out_paths
