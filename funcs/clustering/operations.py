@@ -239,53 +239,31 @@ class ClusteringOperations():
             else:
                 idx[:, d] = np.minimum(np.maximum(idx[:, d], 0), dims[d] - 1)
 
-        # Map voxel (linear index) -> count of points
+        # Map voxel (linear index) -> count of points using vectorized unique
         if self.num_of_dims == 2:
             lin = idx[:, 0] * dims[1] + idx[:, 1]
         else:
             lin = (idx[:, 0] * dims[1] + idx[:, 1]) * dims[2] + idx[:, 2]
-        # Count per voxel
-        # Use dict for sparsity
-        counts = {}
-        for v in lin:
-            counts[v] = counts.get(v, 0) + 1
 
-        # Keep only voxels meeting threshold
-        occupied = [v for v, c in counts.items() if c >= min_points_per_voxel]
-        if not occupied:
+        uniq, inv, cnt = np.unique(lin, return_inverse=True, return_counts=True)
+        occ_mask = cnt >= min_points_per_voxel
+        if not np.any(occ_mask):
             return np.full(n_particles, -1, dtype=self.int_dtype)
-        occupied_set = set(occupied)
 
-        # Build adjacency via neighbor offsets
         if self.num_of_dims == 2:
+            # Retain original Python path for 2D for now
+            occupied = set(uniq[occ_mask].tolist())
+            # Build neighbor offsets as before
             offsets = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if not (dx == 0 and dy == 0)]
             if connectivity == 4:
                 offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-        else:
-            offsets = []
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    for dz in (-1, 0, 1):
-                        if dx == 0 and dy == 0 and dz == 0:
-                            continue
-                        offsets.append((dx, dy, dz))
-            if connectivity in (6, 18):
-                # Filter offsets by Manhattan distance (6) or Chebyshev layers (18)
-                if connectivity == 6:
-                    offsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
-                else:
-                    # 18-neighborhood: exclude corner diagonals
-                    offsets = [o for o in offsets if (abs(o[0]) + abs(o[1]) + abs(o[2])) <= 2]
+            component_id = {}
+            comp_sizes_pts = []
+            current_label = 0
 
-        # BFS over occupied voxels (sparse CCL)
-        component_id = {}
-        comp_sizes_pts = []  # total points per component (sum of voxel counts)
-        current_label = 0
-
-        def neighbors_from_lin(vlin):
-            if self.num_of_dims == 2:
-                x = vlin // dims[1]
-                y = vlin % dims[1]
+            def neighbors_from_lin_2d(vlin2):
+                x = vlin2 // dims[1]
+                y = vlin2 % dims[1]
                 for dx, dy in offsets:
                     nx = x + dx
                     ny = y + dy
@@ -298,62 +276,77 @@ class ClusteringOperations():
                     elif ny < 0 or ny >= dims[1]:
                         continue
                     yield nx * dims[1] + ny
-            else:
-                x = vlin // (dims[1] * dims[2])
-                rem = vlin % (dims[1] * dims[2])
-                y = rem // dims[2]
-                z = rem % dims[2]
-                for dx, dy, dz in offsets:
-                    nx = x + dx
-                    ny = y + dy
-                    nz = z + dz
-                    if boundary_conditions[0] == PERIODIC:
-                        nx %= dims[0]
-                    elif nx < 0 or nx >= dims[0]:
-                        continue
-                    if boundary_conditions[1] == PERIODIC:
-                        ny %= dims[1]
-                    elif ny < 0 or ny >= dims[1]:
-                        continue
-                    if boundary_conditions[2] == PERIODIC:
-                        nz %= dims[2]
-                    elif nz < 0 or nz >= dims[2]:
-                        continue
-                    yield (nx * dims[1] + ny) * dims[2] + nz
 
-        for v in occupied:
-            if v in component_id:
-                continue
-            # BFS
-            q = [v]
-            component_id[v] = current_label
-            total_pts = counts.get(v, 0)
-            qi = 0
-            while qi < len(q):
-                cur = q[qi]
-                qi += 1
-                for nb in neighbors_from_lin(cur):
-                    if nb in occupied_set and nb not in component_id:
-                        component_id[nb] = current_label
-                        q.append(nb)
-                        total_pts += counts.get(nb, 0)
-            comp_sizes_pts.append(total_pts)
-            current_label += 1
+            counts_map = {int(k): int(v) for k, v in zip(uniq.tolist(), cnt.tolist())}
+            for v in uniq[occ_mask]:
+                v = int(v)
+                if v in component_id:
+                    continue
+                q = [v]
+                component_id[v] = current_label
+                total_pts = counts_map.get(v, 0)
+                qi = 0
+                while qi < len(q):
+                    cur = q[qi]
+                    qi += 1
+                    for nb in neighbors_from_lin_2d(cur):
+                        if nb in occupied and nb not in component_id:
+                            component_id[nb] = current_label
+                            q.append(nb)
+                            total_pts += counts_map.get(nb, 0)
+                comp_sizes_pts.append(total_pts)
+                current_label += 1
 
-        # Filter by min_cluster_size (in points)
-        comp_keep = {cid for cid, sz in enumerate(comp_sizes_pts) if sz >= min_cluster_size}
+            comp_keep = {cid for cid, sz in enumerate(comp_sizes_pts) if sz >= min_cluster_size}
+            out = np.full(n_particles, -1, dtype=self.int_dtype)
+            # Vectorized back-mapping using inv -> uniq index
+            # Fallback simple loop for 2D mapping
+            for i in range(n_particles):
+                vlin_i = int(lin[i])
+                cid = component_id.get(vlin_i, -1)
+                if cid in comp_keep:
+                    out[i] = cid
+            return out
 
-        # Map each point to its voxel component label
+        # 3D path with Numba-accelerated sparse CCL
+        occ_lin = uniq[occ_mask].astype(np.int64, copy=False)
+        occ_counts = cnt[occ_mask].astype(np.int64, copy=False)
+        dims64 = dims.astype(np.int64, copy=False)
+        # Compute components on occupied voxels
+        voxel_labels, comp_sizes_pts, n_comp = ccl_occupied_voxels_3d(
+            occ_lin.astype(np.int64), occ_counts.astype(np.int64), dims64, boundary_conditions.astype(np.int32), int(connectivity)
+        )
+
+        # Keep components by total points
+        if n_comp == 0:
+            return np.full(n_particles, -1, dtype=self.int_dtype)
+        keep = np.zeros(n_comp, dtype=np.bool_)
+        for cid in range(n_comp):
+            if comp_sizes_pts[cid] >= int(min_cluster_size):
+                keep[cid] = True
+
+        # Remap kept component ids to 0..K-1
+        comp_map = -np.ones(n_comp, dtype=np.int64)
+        next_id = 0
+        for cid in range(n_comp):
+            if keep[cid]:
+                comp_map[cid] = next_id
+                next_id += 1
+
+        # Build uniq -> component id map (-1 for non-occupied or dropped)
+        uniq_to_comp = -np.ones(uniq.shape[0], dtype=np.int64)
+        occ_idx = np.where(occ_mask)[0]
+        for j in range(occ_idx.size):
+            cid = voxel_labels[j]
+            if cid >= 0 and keep[cid]:
+                uniq_to_comp[occ_idx[j]] = comp_map[cid]
+
+        # Map each point using inverse indices
+        comp_for_point = uniq_to_comp[inv]
         out = np.full(n_particles, -1, dtype=self.int_dtype)
-        for i in range(n_particles):
-            if self.num_of_dims == 2:
-                vlin = idx[i, 0] * dims[1] + idx[i, 1]
-            else:
-                vlin = (idx[i, 0] * dims[1] + idx[i, 1]) * dims[2] + idx[i, 2]
-            cid = component_id.get(vlin, -1)
-            if cid in comp_keep:
-                out[i] = cid
-
+        # Assign only for kept components
+        sel = comp_for_point >= 0
+        out[sel] = comp_for_point[sel].astype(self.int_dtype, copy=False)
         return out
     
     def _fof_numpy(
@@ -1251,86 +1244,75 @@ class ClusteringOperations():
         else:
             boundary_conditions = np.array(boundary_conditions, dtype=np.int32)
 
+        # Indices of active voxels
         idx = np.where(mask)
         if len(idx[0]) == 0:
             return np.full(mask.shape, -1, dtype=self.int_dtype)
 
-        if self.num_of_dims == 2:
-            lin = idx[0] * dims[1] + idx[1]
-        else:
-            lin = (idx[0] * dims[1] + idx[1]) * dims[2] + idx[2]
-        voxels = set(lin.tolist())
-
-        # Neighbor offsets
-        if self.num_of_dims == 2:
-            if connectivity == 4:
-                offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-            else:
-                offsets = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if not (dx == 0 and dy == 0)]
-        else:
-            if connectivity == 6:
-                offsets = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
-            elif connectivity == 18:
-                offsets = []
-                for dx in (-1, 0, 1):
-                    for dy in (-1, 0, 1):
-                        for dz in (-1, 0, 1):
-                            if dx == 0 and dy == 0 and dz == 0:
-                                continue
-                            if abs(dx) + abs(dy) + abs(dz) <= 2:
-                                offsets.append((dx, dy, dz))
-            else:  # 26
-                offsets = []
-                for dx in (-1, 0, 1):
-                    for dy in (-1, 0, 1):
-                        for dz in (-1, 0, 1):
-                            if dx == 0 and dy == 0 and dz == 0:
-                                continue
-                            offsets.append((dx, dy, dz))
-
-        def neighbors_from_lin(vlin):
-            if self.num_of_dims == 2:
-                x = vlin // dims[1]
-                y = vlin % dims[1]
-                for dx, dy in offsets:
-                    nx = x + dx
-                    ny = y + dy
-                    if boundary_conditions[0] == PERIODIC:
-                        nx %= dims[0]
-                    elif nx < 0 or nx >= dims[0]:
-                        continue
-                    if boundary_conditions[1] == PERIODIC:
-                        ny %= dims[1]
-                    elif ny < 0 or ny >= dims[1]:
-                        continue
-                    yield nx * dims[1] + ny
-            else:
-                x = vlin // (dims[1] * dims[2])
-                rem = vlin % (dims[1] * dims[2])
-                y = rem // dims[2]
-                z = rem % dims[2]
-                for dx, dy, dz in offsets:
-                    nx = x + dx
-                    ny = y + dy
-                    nz = z + dz
-                    if boundary_conditions[0] == PERIODIC:
-                        nx %= dims[0]
-                    elif nx < 0 or nx >= dims[0]:
-                        continue
-                    if boundary_conditions[1] == PERIODIC:
-                        ny %= dims[1]
-                    elif ny < 0 or ny >= dims[1]:
-                        continue
-                    if boundary_conditions[2] == PERIODIC:
-                        nz %= dims[2]
-                    elif nz < 0 or nz >= dims[2]:
-                        continue
-                    yield (nx * dims[1] + ny) * dims[2] + nz
-
         labels_grid = np.full(mask.shape, -1, dtype=self.int_dtype)
+
+        # Fast path: 3D Numba-accelerated sparse CCL over occupied voxels
+        if self.num_of_dims == 3:
+            x, y, z = idx[0].astype(np.int64), idx[1].astype(np.int64), idx[2].astype(np.int64)
+            lin = (x * dims[1] + y) * dims[2] + z
+            # Count per occupied voxel is 1 (grid method counts voxels)
+            ones = np.ones(lin.shape[0], dtype=np.int64)
+            from .core_functions import ccl_occupied_voxels_3d
+            voxel_labels, comp_sizes_pts, n_comp = ccl_occupied_voxels_3d(
+                lin.astype(np.int64, copy=False),
+                ones,
+                dims.astype(np.int64, copy=False),
+                boundary_conditions.astype(np.int32, copy=False),
+                int(connectivity)
+            )
+            # Keep components with size >= min_cluster_size
+            keep = np.zeros(max(n_comp, 1), dtype=np.bool_)
+            for cid in range(n_comp):
+                if comp_sizes_pts[cid] >= int(min_cluster_size):
+                    keep[cid] = True
+            # Remap kept components to 0..K-1
+            comp_map = -np.ones(max(n_comp, 1), dtype=np.int64)
+            next_id = 0
+            for cid in range(n_comp):
+                if keep[cid]:
+                    comp_map[cid] = next_id
+                    next_id += 1
+            # Fill grid
+            for i in range(lin.shape[0]):
+                cid = voxel_labels[i]
+                if cid >= 0:
+                    rid = comp_map[cid]
+                    if rid >= 0:
+                        labels_grid[x[i], y[i], z[i]] = self.int_dtype(rid)
+            return labels_grid
+
+        # 2D fallback: keep existing Python implementation for now
+        # Compute linear indices and adjacency as in original, but lighter
+        lin = idx[0] * dims[1] + idx[1]
+        voxels = set(lin.tolist())
+        if connectivity == 4:
+            offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        else:
+            offsets = [(dx, dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if not (dx == 0 and dy == 0)]
+
+        def neighbors_from_lin_2d(vlin):
+            x0 = vlin // dims[1]
+            y0 = vlin % dims[1]
+            for dx, dy in offsets:
+                nx = x0 + dx
+                ny = y0 + dy
+                if boundary_conditions[0] == PERIODIC:
+                    nx %= dims[0]
+                elif nx < 0 or nx >= dims[0]:
+                    continue
+                if boundary_conditions[1] == PERIODIC:
+                    ny %= dims[1]
+                elif ny < 0 or ny >= dims[1]:
+                    continue
+                yield nx * dims[1] + ny
+
         comp_id = {}
         cur_label = 0
-
         for v in voxels:
             if v in comp_id:
                 continue
@@ -1340,30 +1322,23 @@ class ClusteringOperations():
             while qi < len(q):
                 cur = q[qi]
                 qi += 1
-                for nb in neighbors_from_lin(cur):
+                for nb in neighbors_from_lin_2d(cur):
                     if (nb in voxels) and (nb not in comp_id):
                         comp_id[nb] = cur_label
                         q.append(nb)
             cur_label += 1
 
-        # Count and filter
         counts = np.zeros(cur_label, dtype=np.int64)
         for v in voxels:
             counts[comp_id[v]] += 1
         keep = counts >= int(min_cluster_size)
 
-        # Fill grid labels and remap to 0..K-1
-        if self.num_of_dims == 2:
-            for x, y in zip(idx[0], idx[1]):
-                vlin = x * dims[1] + y
-                cid = comp_id.get(vlin, -1)
-                labels_grid[x, y] = cid if (cid != -1 and keep[cid]) else -1
-        else:
-            for x, y, z in zip(idx[0], idx[1], idx[2]):
-                vlin = (x * dims[1] + y) * dims[2] + z
-                cid = comp_id.get(vlin, -1)
-                labels_grid[x, y, z] = cid if (cid != -1 and keep[cid]) else -1
+        for x0, y0 in zip(idx[0], idx[1]):
+            vlin = x0 * dims[1] + y0
+            cid = comp_id.get(int(vlin), -1)
+            labels_grid[x0, y0] = cid if (cid != -1 and keep[cid]) else -1
 
+        # Compact labels to 0..K-1
         uniq = np.unique(labels_grid)
         uniq = uniq[uniq >= 0]
         remap = {lab: i for i, lab in enumerate(uniq)}
