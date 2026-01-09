@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Grid-based clustering demo aligned with your tracking_SNe workflow.
+Grid-based clustering demo.
+
+Author:
+James R. Beattie.
 
 Usage:
   python examples/main_grid_demo.py --data ../data/info_00100.npz --out clustering_cache_00100 --threshold -1.5
