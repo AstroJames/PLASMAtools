@@ -3,8 +3,10 @@
 ## ###############################################################
 
 from h5py import File
+import os
 import numpy as np
-from ..funcs.derived_vars import DerivedVars as DV
+# NOTE: DerivedVars import is deferred to avoid triggering numba cache setup
+# unless derived variables are actually used.
 
 ## ###############################################################
 ## Auxillary reading functions (can be jit compiled)
@@ -13,6 +15,7 @@ from ..funcs.derived_vars import DerivedVars as DV
 from .read_FLASH    import  reformat_FLASH_field, unsort_FLASH_field
 from .read_BHAC     import  reformat_BHAC_field
 from .read_RAMSES   import  reformat_RAMSES_field
+from .read_ATHENAK  import  load_athenak, AthenaKBinData
 
 ## ###############################################################
 ## Global variabes
@@ -318,6 +321,28 @@ class Fields():
                     setattr(self, field_str, field)
             del d
 
+        elif self.sim_data_type == "athenak":
+            ak = load_athenak(
+                file_number=self.plot_file_num if hasattr(self, "plot_file_num") else 0,
+                basename="CS",
+                data_dir=os.path.dirname(self.filename) if hasattr(self, "filename") else ".",
+            )
+            if field_str == "vel":
+                ak.read("vel")
+                self.vel = ak.vel
+            elif field_str == "mag":
+                ak.read("mag")
+                self.mag = ak.mag
+            elif field_str == "dens":
+                ak.read("dens")
+                self.dens = ak.dens
+            elif field_str in ("pres", "press"):
+                ak.read("press")
+                self.pres = ak.press
+            elif field_str == "cur":
+                ak.read("cur")
+                self.cur = ak.cur
+
     def _read_scalar_field(
         self, 
         field_str: str, 
@@ -506,6 +531,9 @@ class Fields():
         """
         
         # this is a pre-defined table for common derived vars
+        # Import DerivedVars lazily to avoid numba cache setup unless needed
+        from ..funcs.derived_vars import DerivedVars as DV
+
         var_lookup_table = {
             "E"            : ["Ex","Ey","Ez"],                   # electric field
             "Exb"          : ["Exbx","Exby","Exbz"],             # reconnection inflow velocity
