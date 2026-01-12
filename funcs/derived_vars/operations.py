@@ -565,12 +565,12 @@ class DerivedVars(ScalarOperations,
             out = np.zeros_like(vector_field[X])
             # 2D curl still uses separate calls (could be optimized similarly)
             return self.d.gradient(
-                vector_field[Y_GRID_VEC], 
+                vector_field[Y], 
                 gradient_dir=X,
                 L=self.L[X],
                 boundary_condition=self.bcs[X]) - \
                    self.d.gradient(
-                        vector_field[X_GRID_VEC],
+                        vector_field[X],
                         gradient_dir=Y, 
                         L=self.L[Y],
                         boundary_condition=self.bcs[Y])
