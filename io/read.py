@@ -163,7 +163,8 @@ class Fields():
     def __init__(self,
                  filename         : str,
                  reformat         : bool = False,
-                 sim_data_type    : str = "flash") -> None:
+                 sim_data_type    : str = "flash",
+                 athenak_basename : str = "CS") -> None:
         """
         Initialize a FLASHGridData object by reading in the data from the specified file.
 
@@ -176,12 +177,15 @@ class Fields():
             Default is False.
         sim_data_type : str, optional
             The type of simulation data to read in. Default is "flash".
+        athenak_basename : str, optional
+            The AthenaK basename used when loading AthenaK outputs. Default is "CS".
         """
 
         # simulation attributes
         self.filename           = filename
         self.reformat           = reformat
-        self.sim_data_type      = sim_data_type 
+        self.sim_data_type      = sim_data_type
+        self.athenak_basename   = athenak_basename
         self.n_cores            = 0
         self.nxb                = 0
         self.nyb                = 0
@@ -324,7 +328,7 @@ class Fields():
         elif self.sim_data_type == "athenak":
             ak = load_athenak(
                 file_number=self.plot_file_num if hasattr(self, "plot_file_num") else 0,
-                basename="CS",
+                basename=self.athenak_basename,
                 data_dir=os.path.dirname(self.filename) if hasattr(self, "filename") else ".",
             )
             if field_str == "vel":
